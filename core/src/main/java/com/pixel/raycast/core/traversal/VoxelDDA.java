@@ -52,7 +52,8 @@ public final class VoxelDDA {
         // Instant O(1) global sky culling if ray stays above all solid geometry in the world
         double endY = startY + maxDist * dirY;
         double minRayY = Math.min(startY, endY);
-        if (minRayY >= (grid.getHighestWorldY() + 1.0)) {
+        short highestWorldY = grid.getHighestWorldY();
+        if (highestWorldY > Short.MIN_VALUE && highestWorldY < Short.MAX_VALUE && minRayY >= (highestWorldY + 1.0)) {
             return false; // Zero DDA steps: ray never descends to any solid altitude
         }
 

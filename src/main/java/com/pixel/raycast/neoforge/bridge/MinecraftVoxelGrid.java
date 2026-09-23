@@ -62,13 +62,11 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
         // Section not in cache: check if chunk is loaded in live Minecraft memory
         LevelChunk chunk = null;
-        if (level.getChunkSource() instanceof ServerChunkCache scc) {
+        ChunkAccess ca = level.getChunk(sectionX, sectionZ, ChunkStatus.FULL, false);
+        if (ca instanceof LevelChunk lc) {
+            chunk = lc;
+        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
             chunk = scc.getChunkNow(sectionX, sectionZ);
-        } else {
-            ChunkAccess ca = level.getChunk(sectionX, sectionZ, ChunkStatus.FULL, false);
-            if (ca instanceof LevelChunk lc) {
-                chunk = lc;
-            }
         }
 
         if (chunk != null) {
@@ -94,7 +92,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
     @Override
     public short getHighestWorldY() {
-        return cache.getHighestWorldY();
+        return (short) (level.getMaxBuildHeight() - 1);
     }
 
     @Override

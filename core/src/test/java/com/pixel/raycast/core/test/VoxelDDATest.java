@@ -148,6 +148,32 @@ class VoxelDDATest {
     }
 
     @Test
+    @DisplayName("3D DDA: Sky culling safety when highestWorldY is uninitialized (Short.MIN_VALUE)")
+    void testSkyCullingUninitializedSafety() {
+        class UninitializedGrid extends TestVoxelGrid {
+            @Override
+            public short getHighestWorldY() {
+                return Short.MIN_VALUE;
+            }
+        }
+        UninitializedGrid grid = new UninitializedGrid();
+        grid.setBlock(0, 60, 5, true, (short) 10);
+
+        RayHitResult result = new RayHitResult();
+        // Ray fired from (0.5, 70.0, 0.5) down towards (0.5, 60.0, 5.5)
+        double dx = 0.0;
+        double dy = -10.0;
+        double dz = 5.0;
+        double dist = Math.sqrt(dy * dy + dz * dz);
+        boolean hit = VoxelDDA.trace(0.5, 70.0, 0.5, dx / dist, dy / dist, dz / dist, 50.0, grid, result);
+
+        assertTrue(hit, "Ray must hit solid block even if grid.getHighestWorldY() is Short.MIN_VALUE");
+        assertEquals(0, result.blockX);
+        assertEquals(60, result.blockY);
+        assertEquals(5, result.blockZ);
+    }
+
+    @Test
     @DisplayName("Performance Smoke Test: Minimum throughput >= 80,000 ops/s on populated voxel grid")
     void testPerformanceThroughput() {
         TestVoxelGrid grid = new TestVoxelGrid();

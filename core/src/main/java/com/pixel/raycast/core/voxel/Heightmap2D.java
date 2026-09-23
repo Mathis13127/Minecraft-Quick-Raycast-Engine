@@ -139,6 +139,9 @@ public final class Heightmap2D {
      * @return True if the ray is strictly above any solid matter
      */
     public boolean isAboveTerrain(double minAltitude) {
+        if (highestY == VOID_Y) {
+            return false;
+        }
         return minAltitude >= (highestY + 1.0);
     }
 }

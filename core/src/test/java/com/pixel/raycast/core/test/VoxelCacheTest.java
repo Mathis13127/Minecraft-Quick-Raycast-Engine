@@ -55,6 +55,7 @@ public class VoxelCacheTest {
         // Remove the Y=64 block -> heightmap should become VOID_Y
         column.setVoxel(5, 64, 5, false, (short) 0);
         assertEquals(Heightmap2D.VOID_Y, column.getHeightmap().getHeight(5, 5));
+        assertFalse(column.getHeightmap().isAboveTerrain(100.0), "Heightmap at VOID_Y must not report above terrain");
     }
 
     @Test
