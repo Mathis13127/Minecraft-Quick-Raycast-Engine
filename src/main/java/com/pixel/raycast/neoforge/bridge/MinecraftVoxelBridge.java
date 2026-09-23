@@ -8,7 +8,6 @@ import com.pixel.raycast.core.shape.ShapeRegistry;
 import com.pixel.raycast.core.shape.VoxelShape;
 import com.pixel.raycast.core.voxel.BlockIdRegistry;
 import com.pixel.raycast.core.voxel.VoxelSection;
-import com.pixel.raycast.neoforge.mixin.IRaycastChunkSection;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;

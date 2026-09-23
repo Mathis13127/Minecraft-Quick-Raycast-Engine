@@ -6,7 +6,7 @@ import com.pixel.raycast.core.voxel.BlockIdRegistry;
 import com.pixel.raycast.core.voxel.Heightmap2D;
 import com.pixel.raycast.core.voxel.VoxelSection;
 import com.pixel.raycast.neoforge.bridge.MinecraftVoxelBridge;
-import com.pixel.raycast.neoforge.mixin.IRaycastChunkSection;
+import com.pixel.raycast.neoforge.bridge.IRaycastChunkSection;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.Direction;
 import net.minecraft.server.Bootstrap;

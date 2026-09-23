@@ -2,6 +2,7 @@ package com.pixel.raycast.neoforge.mixin;
 
 import com.pixel.raycast.core.cache.VoxelChunkColumn;
 import com.pixel.raycast.core.voxel.VoxelSection;
+import com.pixel.raycast.neoforge.bridge.IRaycastChunkSection;
 import com.pixel.raycast.neoforge.bridge.MinecraftVoxelBridge;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
@@ -12,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Mixin injecting IRaycastChunkSection into LevelChunkSection and capturing
+ * Mixin injecting {@link IRaycastChunkSection} into {@link LevelChunkSection} and capturing
  * setBlockState mutations for instant dirty tracking in the VoxelCache.
  */
 @Mixin(LevelChunkSection.class)
