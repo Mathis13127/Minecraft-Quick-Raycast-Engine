@@ -55,12 +55,16 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
-        VoxelSection section = cache.getSection(sectionX, sectionY, sectionZ);
-        if (section != null) {
-            return section;
+        // 1. Check in-memory VoxelCache columns first (lock-free)
+        VoxelChunkColumn column = cache.getColumn(sectionX, sectionZ);
+        if (column != null) {
+            VoxelSection section = column.getSection(sectionY);
+            if (section != null) {
+                return section;
+            }
         }
 
-        // Section not in cache: check if chunk is loaded in live Minecraft memory
+        // 2. Check if chunk is loaded in live Minecraft memory (RAM)
         LevelChunk chunk = null;
         ChunkAccess ca = level.getChunk(sectionX, sectionZ, ChunkStatus.FULL, false);
         if (ca instanceof LevelChunk lc) {
@@ -76,9 +80,19 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
                 LevelChunkSection[] sections = chunk.getSections();
                 if (secIdx >= 0 && secIdx < sections.length) {
                     LevelChunkSection vanillaSection = sections[secIdx];
-                    VoxelChunkColumn column = cache.getOrCreateColumn(sectionX, sectionZ);
-                    return MinecraftVoxelBridge.compileSection(vanillaSection, column, sectionY);
+                    VoxelChunkColumn col = cache.getOrCreateColumn(sectionX, sectionZ);
+                    return MinecraftVoxelBridge.compileSection(vanillaSection, col, sectionY);
                 }
+            }
+        }
+
+        // 3. Fallback to offline disk provider (MCA region reader) only if not loaded in live RAM
+        IVoxelGrid diskFallback = cache.getDiskFallback();
+        if (diskFallback != null) {
+            VoxelSection diskSection = diskFallback.getSection(sectionX, sectionY, sectionZ);
+            if (diskSection != null) {
+                cache.putSection(sectionX, sectionY, sectionZ, diskSection);
+                return diskSection;
             }
         }
 

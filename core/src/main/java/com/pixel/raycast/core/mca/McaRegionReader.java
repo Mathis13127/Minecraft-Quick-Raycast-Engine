@@ -26,6 +26,7 @@ import java.util.zip.InflaterInputStream;
  */
 public final class McaRegionReader implements Closeable {
 
+    private static final System.Logger LOGGER = System.getLogger(McaRegionReader.class.getName());
     private static final Pattern REGION_FILE_PATTERN = Pattern.compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca");
 
     private static final byte[] SECTIONS_NAME = "sections".getBytes(StandardCharsets.US_ASCII);
@@ -163,33 +164,105 @@ public final class McaRegionReader implements Closeable {
         }
 
         ByteBuffer chunkHeader = ByteBuffer.allocate(5);
-        channel.read(chunkHeader, (long) sectorOffset * 4096L);
+        int headerRead = channel.read(chunkHeader, (long) sectorOffset * 4096L);
+        if (headerRead < 5) {
+            return 0; // Truncated or empty sector
+        }
         chunkHeader.flip();
 
         int length = chunkHeader.getInt();
-        int compressionType = chunkHeader.get() & 0xFF;
-        if (compressionType != 2) {
-            throw new UnsupportedOperationException("Unsupported compression type " + compressionType + " in chunk (" + localChunkX + ", " + localChunkZ + ")");
+        if (length <= 0) {
+            return 0; // Unallocated or unwritten chunk
         }
 
-        ByteBuffer payload = ByteBuffer.allocate(length - 1);
-        channel.read(payload, (long) sectorOffset * 4096L + 5L);
-        payload.flip();
+        int rawCompressionType = chunkHeader.get() & 0xFF;
+        boolean isExternal = (rawCompressionType & 128) != 0;
+        int compressionType = rawCompressionType & 0x7F;
 
-        byte[] compressed = new byte[payload.remaining()];
-        payload.get(compressed);
+        byte[] compressed;
+
+        if (isExternal) {
+            int worldChunkX = (regionX << 5) | localChunkX;
+            int worldChunkZ = (regionZ << 5) | localChunkZ;
+            Path parentDir = filePath.getParent();
+            Path mccPath = (parentDir != null) ? parentDir.resolve("c." + worldChunkX + "." + worldChunkZ + ".mcc") : null;
+            if (mccPath == null || !java.nio.file.Files.isRegularFile(mccPath)) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "External chunk file for chunk ({0}, {1}) in region r.{2}.{3}.mca not found: {4}",
+                        localChunkX, localChunkZ, regionX, regionZ, mccPath);
+                return 0;
+            }
+            try {
+                compressed = java.nio.file.Files.readAllBytes(mccPath);
+            } catch (IOException e) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Failed to read external chunk file {0}: {1}",
+                        mccPath, e.getMessage());
+                return 0;
+            }
+        } else {
+            int payloadLength = length - 1;
+            if (payloadLength <= 0) {
+                return 0;
+            }
+            ByteBuffer payload = ByteBuffer.allocate(payloadLength);
+            int payloadRead = channel.read(payload, (long) sectorOffset * 4096L + 5L);
+            if (payloadRead < payloadLength) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Truncated payload in chunk ({0}, {1}) in region r.{2}.{3}.mca: expected {4}, read {5}",
+                        localChunkX, localChunkZ, regionX, regionZ, payloadLength, payloadRead);
+                return 0;
+            }
+            payload.flip();
+            compressed = new byte[payload.remaining()];
+            payload.get(compressed);
+        }
 
         byte[] decompressed;
-        try (InflaterInputStream inflater = new InflaterInputStream(new ByteArrayInputStream(compressed))) {
-            decompressed = inflater.readAllBytes();
+        try {
+            switch (compressionType) {
+                case 1 -> { // GZIP
+                    try (java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(compressed))) {
+                        decompressed = gzip.readAllBytes();
+                    }
+                }
+                case 2 -> { // DEFLATE (Zlib)
+                    try (InflaterInputStream inflater = new InflaterInputStream(new ByteArrayInputStream(compressed))) {
+                        decompressed = inflater.readAllBytes();
+                    }
+                }
+                case 3 -> { // Uncompressed
+                    decompressed = compressed;
+                }
+                default -> {
+                    LOGGER.log(System.Logger.Level.WARNING,
+                            "Unsupported compression type {0} in chunk ({1}, {2}) in region r.{3}.{4}.mca, skipping",
+                            rawCompressionType, localChunkX, localChunkZ, regionX, regionZ);
+                    return 0;
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to decompress chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
+                    localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
+            return 0;
         }
 
         ByteBuffer buf = ByteBuffer.wrap(decompressed);
+        if (buf.remaining() < 1) {
+            return 0;
+        }
         byte rootType = buf.get();
         if (rootType != FastNbtReader.TAG_COMPOUND) {
-            throw new IllegalStateException("Corrupted NBT root tag: expected 10, got " + rootType);
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Corrupted NBT root tag in chunk ({0}, {1}) in region r.{2}.{3}.mca: expected 10, got {4}",
+                    localChunkX, localChunkZ, regionX, regionZ, rootType);
+            return 0;
         }
         int rootNameLen = buf.getShort() & 0xFFFF;
+        if (buf.remaining() < rootNameLen) {
+            return 0;
+        }
         buf.position(buf.position() + rootNameLen);
 
         int parsedSections = 0;

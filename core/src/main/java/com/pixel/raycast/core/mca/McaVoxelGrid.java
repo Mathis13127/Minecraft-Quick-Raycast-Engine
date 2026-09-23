@@ -16,6 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class McaVoxelGrid implements IVoxelGrid {
 
+    private static final System.Logger LOGGER = System.getLogger(McaVoxelGrid.class.getName());
+
     private final BlockIdRegistry registry;
     private final Map<Long, VoxelSection> sectionCache = new ConcurrentHashMap<>();
     private final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new ConcurrentHashMap<>();
@@ -209,8 +211,11 @@ public final class McaVoxelGrid implements IVoxelGrid {
             try {
                 loadChunk(sectionX, sectionZ);
                 return sectionCache.get(key);
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to lazy-load chunk (" + sectionX + ", " + sectionZ + ") from region r." + rx + "." + rz + ".mca", e);
+            } catch (Exception e) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
+                        sectionX, sectionZ, rx, rz, e.getMessage());
+                return null;
             }
         }
 
