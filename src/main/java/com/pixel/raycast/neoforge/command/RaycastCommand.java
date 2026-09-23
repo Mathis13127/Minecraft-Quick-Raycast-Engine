@@ -49,13 +49,13 @@ public final class RaycastCommand {
                 .requires(source -> source.hasPermission(0))
                 .then(Commands.literal("test")
                         .executes(ctx -> executeTest(ctx, 256.0))
-                        .then(Commands.argument("distance", DoubleArgumentType.doubleArg(1.0, 4096.0))
+                        .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1))
                                 .executes(ctx -> executeTest(ctx, DoubleArgumentType.getDouble(ctx, "distance")))))
                 .then(Commands.literal("benchmark")
                         .requires(source -> source.hasPermission(2))
                         .then(Commands.argument("rays", IntegerArgumentType.integer(100, 10_000_000))
                                 .executes(ctx -> executeBenchmark(ctx, IntegerArgumentType.getInteger(ctx, "rays"), 256.0))
-                                .then(Commands.argument("distance", DoubleArgumentType.doubleArg(1.0, 4096.0))
+                                .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1))
                                         .executes(ctx -> executeBenchmark(ctx,
                                                 IntegerArgumentType.getInteger(ctx, "rays"),
                                                 DoubleArgumentType.getDouble(ctx, "distance"))))))
