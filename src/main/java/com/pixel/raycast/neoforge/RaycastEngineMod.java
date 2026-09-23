@@ -34,6 +34,12 @@ public class RaycastEngineMod {
     }
 
     @SubscribeEvent
+    public void onRegisterCommands(net.neoforged.neoforge.event.RegisterCommandsEvent event) {
+        com.pixel.raycast.neoforge.command.RaycastCommand.register(event.getDispatcher());
+        LOGGER.info("[RaycastEngine] Registered /raycast and /qre commands.");
+    }
+
+    @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         MinecraftVoxelBridge.reset();
         LOGGER.info("[RaycastEngine] Cleared all voxel grids and cache references on server stop.");

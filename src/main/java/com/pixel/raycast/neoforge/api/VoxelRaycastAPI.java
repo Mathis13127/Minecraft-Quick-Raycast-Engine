@@ -56,6 +56,36 @@ public final class VoxelRaycastAPI {
     }
 
     /**
+     * Performs a 3D DDA raycast between two world positions, writing results directly
+     * into the provided mutable RayHitResult with zero heap allocations.
+     *
+     * @param level Minecraft Level
+     * @param from Start position
+     * @param to End position
+     * @param out Mutable container populated with impact data
+     * @return True if a solid block was struck, false on miss
+     */
+    public static boolean raycast(Level level, Vec3 from, Vec3 to, RayHitResult out) {
+        if (level == null || from == null || to == null || out == null) {
+            if (out != null) out.reset();
+            return false;
+        }
+        double dx = to.x - from.x;
+        double dy = to.y - from.y;
+        double dz = to.z - from.z;
+        double distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < 1e-9) {
+            out.reset();
+            return false;
+        }
+        double dist = Math.sqrt(distSq);
+        double invDist = 1.0 / dist;
+
+        IVoxelGrid grid = getGrid(level);
+        return VoxelDDA.trace(from.x, from.y, from.z, dx * invDist, dy * invDist, dz * invDist, dist, grid, out);
+    }
+
+    /**
      * Performs a 3D DDA raycast between two world positions.
      *
      * @param level Minecraft Level

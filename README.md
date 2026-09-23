@@ -3,7 +3,7 @@
 [![Minecraft 1.21.1](https://img.shields.io/badge/Minecraft-1.21.1-brightgreen.svg)](https://neoforged.net/)
 [![NeoForge](https://img.shields.io/badge/NeoForge-21.1.229-orange.svg)](https://neoforged.net/)
 [![Java 21](https://img.shields.io/badge/Java-21-blue.svg)](https://www.oracle.com/java/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Custom (QRE-AL)](https://img.shields.io/badge/License-Custom%20(QRE--AL)-blueviolet.svg)](LICENSE)
 [![Throughput](https://img.shields.io/badge/Throughput-36M%2B%20rays%2Fsec-success.svg)](#benchmarks)
 
 **Quick Raycast Engine** is an ultra-fast, deterministic 3D voxel traversal and raycasting library for **Minecraft 1.21.1 (NeoForge)** and standalone Java applications. 
@@ -182,6 +182,20 @@ pool.parallelFor(0, rayCount, (context, index) -> {
 
 ---
 
+## In-Game Commands (`/raycast` or `/qre`)
+
+Quick Raycast Engine includes built-in commands for in-game testing, visual debugging, stress-testing, and telemetry:
+
+| Command | Permission | Description |
+| :--- | :--- | :--- |
+| `/raycast test [distance]` | All (Level 0) | Fires a real-time ray along player line-of-sight with visual particles. Displays hit block, face, coordinates, distance, and latency in nanoseconds. |
+| `/raycast benchmark <rays> [distance]` | OP (Level 2) | Multi-threaded stress-test (Fibonacci sphere) across live loaded chunks. Reports total duration, throughput (rays/sec), and hit/miss ratios. |
+| `/raycast benchmark_mca <rx> <rz> <rays>` | OP (Level 2) | Streams an unloaded `r.rx.rz.mca` region directly from disk and benchmarks traversal throughput without loading chunks into Minecraft memory. |
+| `/raycast cache stats` | All (Level 0) | Displays real-time VoxelCache telemetry (cached chunk columns and active sections). |
+| `/raycast cache clear` | OP (Level 2) | Flushes all in-memory voxel caches to allow comparative cold-start testing. |
+
+---
+
 ## Integration in Gradle
 
 To include Quick Raycast Engine as a dependency in your mod:
@@ -207,6 +221,19 @@ dependencies {
 
 ---
 
-## License
+## License & Attribution
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Quick Raycast Engine - Modding, Attribution & Non-Commercial License (QRE-AL)**.
+
+### Summary of Permissions & Requirements:
+- **Free for Minecraft Projects**: You are free to include, link against, and distribute Quick Raycast Engine as a library or dependency within any public or private Minecraft mod, modpack, or server.
+- **Mandatory Attribution**: Any project utilizing this software **MUST prominently and visibly display**:
+  1. Author: **`Pixel`**
+  2. Software Name: **`Quick Raycast Engine`**
+  3. Official Repository Link: `https://github.com/Mathis13127/Minecraft-Quick-Raycast-Engine`
+  *(in your mod description on CurseForge, Modrinth, GitHub, and in-game credit screens).*
+- **Strictly Non-Commercial**: The software, its binaries, and derived code may not be sold, monetized, or paywalled (e.g. Patreon early access, Tebex, VIP server monetization) without express prior written consent from Pixel.
+- **No Concealed Reuse / Anti-Plagiarism**: You may not rename packages, strip headers, or claim authorship of this codebase. Public derivatives must remain open-source and preserve these terms and attribution.
+
+See the full [LICENSE](LICENSE) file for complete legal terms.
+

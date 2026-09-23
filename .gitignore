@@ -43,3 +43,6 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+
+# Added via CraftBench Vault
+.git/

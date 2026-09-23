@@ -1,21 +1,63 @@
-MIT License
+Quick Raycast Engine - Modding, Attribution & Non-Commercial License (QRE-AL)
+Version 1.0
 
-Copyright (c) 2026 Mathis13127
+Copyright (c) 2026 Pixel (Mathis13127). All rights reserved.
+Official Repository: https://github.com/Mathis13127/Minecraft-Quick-Raycast-Engine
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+================================================================================
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+================================================================================
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. GRANT OF LICENSE FOR MINECRAFT PROJECTS
+Subject to the terms and conditions of this License, the Author ("Pixel") grants
+you a worldwide, non-exclusive, royalty-free license to:
+  a. Link against, import, execute, and package the Quick Raycast Engine (in source
+     or binary form) as a library or dependency within any Minecraft mod, modpack,
+     server environment, or client configuration.
+  b. Inspect, study, and modify the source code for personal, non-commercial,
+     educational, or debugging purposes.
 
+2. MANDATORY AND PROMINENT ATTRIBUTION REQUIREMENT
+Any project, modification, modpack, fork, application, distribution, or public
+showcase that integrates, bundles, or derives from Quick Raycast Engine MUST
+prominently and explicitly credit the author as follows:
+  a. Author Attribution: The name "Pixel" must appear prominently in the credits,
+     author list, or acknowledgments.
+  b. Project Identification: The name "Quick Raycast Engine" must be explicitly
+     stated in the project description, README, Modrinth page, CurseForge page,
+     or equivalent platform publication.
+  c. Repository Link: A direct, functional link to the official repository
+     (https://github.com/Mathis13127/Minecraft-Quick-Raycast-Engine) must be provided
+     in the public documentation or description.
+
+3. NON-COMMERCIAL RESTRICTION
+The Software, in whole or in part, and any works derived from it, are strictly for
+NON-COMMERCIAL use.
+  a. You may NOT sell, monetize, sub-license, rent, or lease the Software or any
+     derivative work.
+  b. You may NOT place the Software or any features powered by it behind a paywall,
+     subscription service (e.g., Patreon-exclusive builds, Ko-fi tiers, Tebex
+     server stores, VIP packages), or paid commercial platform without explicit,
+     prior written consent from the Author ("Pixel").
+  c. In-game servers utilizing this mod must comply with the Minecraft End User
+     License Agreement (EULA) and may not monetize specific features or capabilities
+     provided exclusively by this Software.
+
+4. ANTI-PLAGIARISM, CODE INTEGRITY & NO CONCEALED REUSE
+  a. Prohibition of Hidden Reuse: You may NOT repackage, obfuscate, or rename the
+     internal codebase to conceal the origin of the software or present it as
+     your own original work.
+  b. Attribution Preservation: All existing copyright notices, author tags, and
+     license headers must remain intact in all copies or substantial portions of
+     the Software.
+  c. Public Derivatives: Any public distribution of a modified version or fork of
+     this Software must remain open-source, must clearly document all changes made,
+     and must be licensed under these exact same terms and attribution requirements.
+
+5. DISCLAIMER OF WARRANTY AND LIMITATION OF LIABILITY
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR
+("PIXEL") BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

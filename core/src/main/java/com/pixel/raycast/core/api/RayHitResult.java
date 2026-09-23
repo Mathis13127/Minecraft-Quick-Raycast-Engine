@@ -51,6 +51,46 @@ public final class RayHitResult {
         this.distance = distance;
     }
 
+    public boolean isHit() {
+        return hit;
+    }
+
+    public double getHitX() {
+        return hitX;
+    }
+
+    public double getHitY() {
+        return hitY;
+    }
+
+    public double getHitZ() {
+        return hitZ;
+    }
+
+    public int getBlockX() {
+        return blockX;
+    }
+
+    public int getBlockY() {
+        return blockY;
+    }
+
+    public int getBlockZ() {
+        return blockZ;
+    }
+
+    public VoxelFace getFace() {
+        return face;
+    }
+
+    public short getBlockId() {
+        return blockId;
+    }
+
+    public double getDistance() {
+        return distance;
+    }
+
     public void copyFrom(RayHitResult other) {
         this.hit = other.hit;
         this.hitX = other.hitX;
