@@ -22,6 +22,8 @@ public final class McaVoxelGrid implements IVoxelGrid {
     private final Map<Long, VoxelSection> sectionCache = new ConcurrentHashMap<>();
     private final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new ConcurrentHashMap<>();
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
+    private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
     private final Path regionDirectory;
     private short highestWorldY = Short.MIN_VALUE;
 
@@ -114,6 +116,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
         Objects.requireNonNull(reader, "McaRegionReader cannot be null");
         long rk = regionKey(reader.getRegionX(), reader.getRegionZ());
         regions.put(rk, reader);
+        missingRegions.remove(rk);
     }
 
     /**
@@ -131,9 +134,11 @@ public final class McaVoxelGrid implements IVoxelGrid {
 
         for (int cz = 0; cz < 32; cz++) {
             for (int cx = 0; cx < 32; cx++) {
-                if (!reader.hasChunk(cx, cz)) continue;
                 int worldCx = (rx << 5) | cx;
                 int worldCz = (rz << 5) | cz;
+                loadedChunks.add(chunkKey(worldCx, worldCz));
+
+                if (!reader.hasChunk(cx, cz)) continue;
 
                 int loaded = reader.readChunk(cx, cz, (sectionY, section) -> {
                     long key = sectionKey(worldCx, sectionY, worldCz);
@@ -163,21 +168,35 @@ public final class McaVoxelGrid implements IVoxelGrid {
      * @throws IOException If reading from disk fails
      */
     public int loadChunk(int chunkX, int chunkZ) throws IOException {
+        long cKey = chunkKey(chunkX, chunkZ);
+        if (loadedChunks.contains(cKey)) {
+            return 0;
+        }
+
         int rx = chunkX >> 5;
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
+        if (missingRegions.contains(rKey)) {
+            loadedChunks.add(cKey);
+            return 0;
+        }
+
         McaRegionReader reader = regions.get(rKey);
         if (reader == null && regionDirectory != null) {
             Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
             if (java.nio.file.Files.exists(mcaFile)) {
                 reader = new McaRegionReader(mcaFile, registry);
                 regions.put(rKey, reader);
+            } else {
+                missingRegions.add(rKey);
             }
         }
         if (reader == null) {
+            loadedChunks.add(cKey);
             return 0;
         }
 
+        loadedChunks.add(cKey);
         int localCx = chunkX & 31;
         int localCz = chunkZ & 31;
         return reader.readChunk(localCx, localCz, (sectionY, section) -> {
@@ -203,10 +222,20 @@ public final class McaVoxelGrid implements IVoxelGrid {
             return cached;
         }
 
-        // Lazy-load chunk if region is registered or regionDirectory is configured
+        long cKey = chunkKey(sectionX, sectionZ);
+        if (loadedChunks.contains(cKey)) {
+            return null; // Chunk is already parsed into memory; this section is empty air
+        }
+
         int rx = sectionX >> 5;
         int rz = sectionZ >> 5;
         long rKey = regionKey(rx, rz);
+        if (missingRegions.contains(rKey)) {
+            loadedChunks.add(cKey);
+            return null; // Entire region file does not exist on disk
+        }
+
+        // Lazy-load chunk if region is registered or regionDirectory is configured
         if (regions.containsKey(rKey) || regionDirectory != null) {
             try {
                 loadChunk(sectionX, sectionZ);
@@ -236,5 +265,8 @@ public final class McaVoxelGrid implements IVoxelGrid {
      */
     public void clearCache() {
         sectionCache.clear();
+        heightmaps.clear();
+        loadedChunks.clear();
+        missingRegions.clear();
     }
 }
