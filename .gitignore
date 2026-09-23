@@ -3,6 +3,7 @@
 build/
 core/build/
 **/build/
+.craftbench*
 logs/
 *.log
 *.log.gz

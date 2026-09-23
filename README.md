@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" width="180" alt="Quick Raycast Engine Logo"/>
+</p>
+
 # Quick Raycast Engine (QRE)
 
 [![Minecraft 1.21.1](https://img.shields.io/badge/Minecraft-1.21.1-brightgreen.svg)](https://neoforged.net/)
