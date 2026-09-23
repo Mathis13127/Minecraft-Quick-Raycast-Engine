@@ -43,11 +43,27 @@ public final class McaRegionReader implements Closeable {
     private final int[] sectorOffsets = new int[1024];
     private final BlockIdRegistry registry;
 
+    /**
+     * Functional callback for consuming parsed chunk sections.
+     */
     @FunctionalInterface
     public interface ChunkSectionConsumer {
+        /**
+         * Accepts a parsed VoxelSection at the given vertical section index.
+         *
+         * @param sectionY Vertical section index (e.g. -4 to 19 in 1.21)
+         * @param section  Parsed VoxelSection
+         */
         void accept(int sectionY, VoxelSection section);
     }
 
+    /**
+     * Opens an Anvil MCA region file and reads the 4KB chunk offset table.
+     *
+     * @param path     Path to the r.X.Z.mca file
+     * @param registry BlockIdRegistry for registering block types
+     * @throws IOException If file does not exist or cannot be read
+     */
     public McaRegionReader(Path path, BlockIdRegistry registry) throws IOException {
         this.filePath = Objects.requireNonNull(path, "Path cannot be null");
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
@@ -86,18 +102,40 @@ public final class McaRegionReader implements Closeable {
         }
     }
 
+    /**
+     * Gets the region X coordinate.
+     *
+     * @return Region X
+     */
     public int getRegionX() {
         return regionX;
     }
 
+    /**
+     * Gets the region Z coordinate.
+     *
+     * @return Region Z
+     */
     public int getRegionZ() {
         return regionZ;
     }
 
+    /**
+     * Gets the path to the underlying MCA file.
+     *
+     * @return File path
+     */
     public Path getFilePath() {
         return filePath;
     }
 
+    /**
+     * Checks if the given local chunk (0..31, 0..31) is generated in this region.
+     *
+     * @param localChunkX Local chunk X [0..31]
+     * @param localChunkZ Local chunk Z [0..31]
+     * @return True if chunk offset is non-zero
+     */
     public boolean hasChunk(int localChunkX, int localChunkZ) {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
             return false;
@@ -112,6 +150,7 @@ public final class McaRegionReader implements Closeable {
      * @param localChunkZ Chunk Z relative to region (0..31)
      * @param consumer    Callback receiving each populated section
      * @return Number of sections parsed
+     * @throws IOException If decompression or I/O error occurs
      */
     public int readChunk(int localChunkX, int localChunkZ, ChunkSectionConsumer consumer) throws IOException {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {

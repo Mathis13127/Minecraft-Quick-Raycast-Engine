@@ -18,6 +18,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(LevelChunkSection.class)
 public abstract class LevelChunkSectionMixin implements IRaycastChunkSection {
 
+    /**
+     * Default constructor for LevelChunkSectionMixin.
+     */
+    protected LevelChunkSectionMixin() {}
+
     @Unique
     private VoxelSection raycast$voxelSection;
 

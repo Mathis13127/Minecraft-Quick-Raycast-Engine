@@ -142,6 +142,15 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    if (options instanceof StandardJavadocDocletOptions) {
+        options.addStringOption('Xdoclint:all', '-quiet')
+        options.addBooleanOption('Werror', true)
+    }
+}
+
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {

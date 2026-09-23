@@ -25,6 +25,9 @@ public final class VoxelRaycastAPI {
 
     /**
      * Retrieves or creates the IVoxelGrid corresponding to the given Level.
+     *
+     * @param level Minecraft Level instance
+     * @return MinecraftVoxelGrid spatial accessor
      */
     public static MinecraftVoxelGrid getGrid(Level level) {
         return MinecraftVoxelBridge.getOrCreateGrid(level);
@@ -32,7 +35,7 @@ public final class VoxelRaycastAPI {
 
     /**
      * Checks if the line of sight between two positions is obstructed by any solid voxel.
-     * Extremely fast (< 25 ns) early exit check with zero heap allocation.
+     * Extremely fast (&lt; 25 ns) early exit check with zero heap allocation.
      *
      * @param level Minecraft Level
      * @param from Start position
@@ -137,6 +140,10 @@ public final class VoxelRaycastAPI {
 
     /**
      * Raycasts along a player's look vector up to maxDistance.
+     *
+     * @param player      Player executing the look raycast
+     * @param maxDistance Maximum reach distance in blocks
+     * @return BlockHitResult with intersection details
      */
     public static BlockHitResult raycastPlayerLook(Player player, double maxDistance) {
         Vec3 eyePos = player.getEyePosition();
@@ -145,6 +152,12 @@ public final class VoxelRaycastAPI {
         return raycast(player.level(), eyePos, reachVec);
     }
 
+    /**
+     * Converts an internal VoxelFace into a Minecraft Direction.
+     *
+     * @param face VoxelFace enum value
+     * @return Corresponding Minecraft Direction
+     */
     public static Direction toDirection(VoxelFace face) {
         return switch (face) {
             case DOWN -> Direction.DOWN;

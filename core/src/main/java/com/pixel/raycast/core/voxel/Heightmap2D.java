@@ -8,32 +8,65 @@ import java.util.Arrays;
  */
 public final class Heightmap2D {
 
+    /** Width of a chunk in blocks (16). */
     public static final int CHUNK_WIDTH = 16;
+    /** Total number of column entries (16 x 16 = 256). */
     public static final int ENTRIES = CHUNK_WIDTH * CHUNK_WIDTH; // 256
+    /** Minimum world build altitude (-64). */
     public static final short MIN_Y = -64;
+    /** Void altitude constant representing an unpopulated or empty column (-999). */
     public static final short VOID_Y = -999;
 
     private final short[] heights;
     private short highestY;
 
+    /**
+     * Constructs an empty 2D heightmap initialized to VOID_Y.
+     */
     public Heightmap2D() {
         this.heights = new short[ENTRIES];
         Arrays.fill(heights, VOID_Y);
         this.highestY = VOID_Y;
     }
 
+    /**
+     * Computes the flat array index for a local column (0..15, 0..15).
+     *
+     * @param localX Local column X [0..15]
+     * @param localZ Local column Z [0..15]
+     * @return Flat index [0..255]
+     */
     public static int columnKey(int localX, int localZ) {
         return ((localZ & 15) << 4) | (localX & 15);
     }
 
+    /**
+     * Retrieves the highest solid block Y coordinate for the specified local column.
+     *
+     * @param localX Local column X [0..15]
+     * @param localZ Local column Z [0..15]
+     * @return Highest solid block Y, or VOID_Y if empty
+     */
     public short getHeight(int localX, int localZ) {
         return heights[columnKey(localX, localZ)];
     }
 
+    /**
+     * Retrieves the highest solid block Y coordinate across the entire 16x16 chunk.
+     *
+     * @return Maximum Y altitude
+     */
     public short getHighestY() {
         return highestY;
     }
 
+    /**
+     * Sets the highest solid block Y coordinate for the specified local column.
+     *
+     * @param localX Local column X [0..15]
+     * @param localZ Local column Z [0..15]
+     * @param y      New solid Y altitude
+     */
     public void setHeight(int localX, int localZ, short y) {
         int key = columnKey(localX, localZ);
         short prev = heights[key];
@@ -60,6 +93,10 @@ public final class Heightmap2D {
 
     /**
      * Updates height for a column if the new Y is greater than existing recorded height.
+     *
+     * @param localX Local column X [0..15]
+     * @param localZ Local column Z [0..15]
+     * @param y      Candidate solid Y altitude
      */
     public void updateMax(int localX, int localZ, short y) {
         int key = columnKey(localX, localZ);
@@ -73,6 +110,9 @@ public final class Heightmap2D {
 
     /**
      * Updates the heightmap from the voxels in a VoxelSection at the specified section Y.
+     *
+     * @param sy      Vertical section index
+     * @param section VoxelSection containing solid blocks
      */
     public void updateFromSection(int sy, VoxelSection section) {
         if (section == null || section.isEmpty()) {

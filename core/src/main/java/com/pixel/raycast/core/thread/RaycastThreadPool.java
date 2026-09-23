@@ -17,6 +17,7 @@ import java.util.function.IntConsumer;
  */
 public final class RaycastThreadPool {
 
+    /** Default minimum number of rays before scheduling across worker threads (16). */
     public static final int DEFAULT_PARALLEL_THRESHOLD = 16;
     private static final int WORKER_COUNT = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
 
@@ -41,8 +42,15 @@ public final class RaycastThreadPool {
      * Guarantees 0 byte heap allocation per raycast in multi-threaded loops.
      */
     public static final class RaycastContext {
+        /** Pre-allocated reusable Ray3f instance. */
         public final Ray3f ray = new Ray3f();
+        /** Pre-allocated reusable RayHitResult instance. */
         public final RayHitResult hitResult = new RayHitResult();
+
+        /**
+         * Constructs a new RaycastContext.
+         */
+        public RaycastContext() {}
     }
 
     private static final ThreadLocal<RaycastContext> LOCAL_CONTEXT = ThreadLocal.withInitial(RaycastContext::new);
@@ -51,6 +59,8 @@ public final class RaycastThreadPool {
 
     /**
      * Retrieves the reusable RaycastContext for the calling worker thread.
+     *
+     * @return Thread-local RaycastContext instance
      */
     public static RaycastContext getThreadLocalContext() {
         return LOCAL_CONTEXT.get();
@@ -58,6 +68,8 @@ public final class RaycastThreadPool {
 
     /**
      * Number of background worker threads in the pool.
+     *
+     * @return Worker thread count
      */
     public static int getWorkerCount() {
         return WORKER_COUNT;
@@ -65,6 +77,9 @@ public final class RaycastThreadPool {
 
     /**
      * Submits an asynchronous task to the raycast worker pool.
+     *
+     * @param task Runnable task
+     * @return Future representing pending completion
      */
     public static Future<?> submit(Runnable task) {
         return EXECUTOR.submit(task);
@@ -72,6 +87,10 @@ public final class RaycastThreadPool {
 
     /**
      * Submits a value-returning task to the raycast worker pool.
+     *
+     * @param <T>  Result type
+     * @param task Callable task
+     * @return Future representing pending result
      */
     public static <T> Future<T> submit(Callable<T> task) {
         return EXECUTOR.submit(task);
@@ -91,6 +110,11 @@ public final class RaycastThreadPool {
 
     /**
      * Executes an indexed range in parallel with a custom threshold.
+     *
+     * @param startInclusive Start index (inclusive)
+     * @param endExclusive   End index (exclusive)
+     * @param threshold      Minimum item count required to trigger multi-threading
+     * @param action         Consumer receiving each index
      */
     public static void parallelFor(int startInclusive, int endExclusive, int threshold, IntConsumer action) {
         Objects.requireNonNull(action, "Action cannot be null");
@@ -150,6 +174,10 @@ public final class RaycastThreadPool {
 
     /**
      * Iterates over a list in parallel using the worker pool.
+     *
+     * @param <T>    Element type
+     * @param list   List to process
+     * @param action Consumer for each element
      */
     public static <T> void parallelForEach(List<T> list, Consumer<T> action) {
         Objects.requireNonNull(list, "List cannot be null");

@@ -17,14 +17,26 @@ import org.slf4j.LoggerFactory;
  */
 @Mod(RaycastEngineMod.MOD_ID)
 public class RaycastEngineMod {
+    /** Unique mod identifier. */
     public static final String MOD_ID = "raycastengine";
+    /** Global SLF4J logger for the raycast engine. */
     public static final Logger LOGGER = LoggerFactory.getLogger("RaycastEngine");
 
+    /**
+     * Initializes the mod instance and registers listeners to NeoForge's event bus.
+     *
+     * @param modEventBus The NeoForge mod-lifecycle event bus
+     */
     public RaycastEngineMod(IEventBus modEventBus) {
         LOGGER.info("[RaycastEngine] Initializing Ultra-Fast Raycast Engine for Minecraft 1.21.1...");
         NeoForge.EVENT_BUS.register(this);
     }
 
+    /**
+     * Cleans up dimension voxel grids when a world unloads.
+     *
+     * @param event Level unload event
+     */
     @SubscribeEvent
     public void onLevelUnload(LevelEvent.Unload event) {
         LevelAccessor level = event.getLevel();
@@ -33,12 +45,22 @@ public class RaycastEngineMod {
         }
     }
 
+    /**
+     * Registers developer and testing commands with Brigadier.
+     *
+     * @param event Register commands event
+     */
     @SubscribeEvent
     public void onRegisterCommands(net.neoforged.neoforge.event.RegisterCommandsEvent event) {
         com.pixel.raycast.neoforge.command.RaycastCommand.register(event.getDispatcher());
         LOGGER.info("[RaycastEngine] Registered /raycast and /qre commands.");
     }
 
+    /**
+     * Cleans up all static state and caches on server shutdown.
+     *
+     * @param event Server stopping event
+     */
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         MinecraftVoxelBridge.reset();

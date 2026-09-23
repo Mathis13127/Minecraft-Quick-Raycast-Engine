@@ -10,11 +10,24 @@ import java.util.Objects;
  */
 public final class SubBox {
 
+    /** Minimum bounding box bounds in local voxel coordinates [0..1]. */
     public final float minX, minY, minZ;
+    /** Maximum bounding box bounds in local voxel coordinates [0..1]. */
     public final float maxX, maxY, maxZ;
 
+    /** Standard full cube bounding box [0, 0, 0] to [1, 1, 1]. */
     public static final SubBox FULL = new SubBox(0f, 0f, 0f, 1f, 1f, 1f);
 
+    /**
+     * Constructs a SubBox with the given minimum and maximum coordinate bounds.
+     *
+     * @param minX Minimum X [0..1]
+     * @param minY Minimum Y [0..1]
+     * @param minZ Minimum Z [0..1]
+     * @param maxX Maximum X [0..1]
+     * @param maxY Maximum Y [0..1]
+     * @param maxZ Maximum Z [0..1]
+     */
     public SubBox(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
         if (minX > maxX || minY > maxY || minZ > maxZ) {
             throw new IllegalArgumentException(String.format("Invalid box bounds: [%.2f, %.2f, %.2f] to [%.2f, %.2f, %.2f]",
@@ -28,6 +41,11 @@ public final class SubBox {
         this.maxZ = maxZ;
     }
 
+    /**
+     * Checks if this bounding box spans the entire 1x1x1 cube.
+     *
+     * @return True if full cube
+     */
     public boolean isFullBlock() {
         return minX == 0f && minY == 0f && minZ == 0f && maxX == 1f && maxY == 1f && maxZ == 1f;
     }
@@ -136,10 +154,25 @@ public final class SubBox {
         return true;
     }
 
+    /**
+     * Mutable result container for sub-box intersection queries.
+     */
     public static final class SubBoxHit {
+        /** Intersection distance along the ray. */
         public double t;
+        /** Normal boundary face struck by the ray. */
         public VoxelFace face;
 
+        /**
+         * Constructs a new SubBoxHit initialized to a miss state.
+         */
+        public SubBoxHit() {
+            reset();
+        }
+
+        /**
+         * Resets this hit result to a miss state.
+         */
         public void reset() {
             this.t = Double.MAX_VALUE;
             this.face = VoxelFace.NONE;

@@ -14,12 +14,21 @@ public final class ShapeRegistry {
     private static final int INITIAL_CAPACITY = 256;
     private VoxelShape[] shapes;
 
+    /**
+     * Constructs a ShapeRegistry initialized to full cubes, with air reserved as empty.
+     */
     public ShapeRegistry() {
         this.shapes = new VoxelShape[INITIAL_CAPACITY];
         Arrays.fill(shapes, VoxelShape.FULL_CUBE);
         shapes[BlockIdRegistry.AIR_ID] = VoxelShape.EMPTY;
     }
 
+    /**
+     * Associates a 16-bit block ID with a specific sub-box collision shape.
+     *
+     * @param blockId 16-bit block ID
+     * @param shape   VoxelShape collision model
+     */
     public void registerShape(short blockId, VoxelShape shape) {
         Objects.requireNonNull(shape, "VoxelShape cannot be null");
         int index = blockId & 0xFFFF;
@@ -27,6 +36,12 @@ public final class ShapeRegistry {
         shapes[index] = shape;
     }
 
+    /**
+     * Retrieves the collision shape for a given block ID.
+     *
+     * @param blockId 16-bit block ID
+     * @return Associated VoxelShape, or FULL_CUBE if unmapped
+     */
     public VoxelShape getShape(short blockId) {
         if (blockId == BlockIdRegistry.AIR_ID) {
             return VoxelShape.EMPTY;
@@ -41,6 +56,8 @@ public final class ShapeRegistry {
 
     /**
      * Automatically registers standard Minecraft shapes by matching block name patterns.
+     *
+     * @param blockRegistry Source BlockIdRegistry to inspect
      */
     public void registerDefaultVanillaShapes(BlockIdRegistry blockRegistry) {
         for (short id = 1; id < blockRegistry.size(); id++) {

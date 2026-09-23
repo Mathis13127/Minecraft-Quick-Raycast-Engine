@@ -9,24 +9,43 @@ import java.nio.charset.StandardCharsets;
  */
 public final class FastNbtReader {
 
+    /** NBT Tag End (0). */
     public static final byte TAG_END = 0;
+    /** NBT Tag Byte (1). */
     public static final byte TAG_BYTE = 1;
+    /** NBT Tag Short (2). */
     public static final byte TAG_SHORT = 2;
+    /** NBT Tag Int (3). */
     public static final byte TAG_INT = 3;
+    /** NBT Tag Long (4). */
     public static final byte TAG_LONG = 4;
+    /** NBT Tag Float (5). */
     public static final byte TAG_FLOAT = 5;
+    /** NBT Tag Double (6). */
     public static final byte TAG_DOUBLE = 6;
+    /** NBT Tag Byte Array (7). */
     public static final byte TAG_BYTE_ARRAY = 7;
+    /** NBT Tag String (8). */
     public static final byte TAG_STRING = 8;
+    /** NBT Tag List (9). */
     public static final byte TAG_LIST = 9;
+    /** NBT Tag Compound (10). */
     public static final byte TAG_COMPOUND = 10;
+    /** NBT Tag Int Array (11). */
     public static final byte TAG_INT_ARRAY = 11;
+    /** NBT Tag Long Array (12). */
     public static final byte TAG_LONG_ARRAY = 12;
 
     private FastNbtReader() {}
 
     /**
      * Checks if the slice of bytes in the buffer matches the expected byte array.
+     *
+     * @param buf      Byte buffer to inspect
+     * @param offset   Starting byte offset
+     * @param length   Byte length to compare
+     * @param expected Target byte sequence
+     * @return True if contents match exactly
      */
     public static boolean matches(ByteBuffer buf, int offset, int length, byte[] expected) {
         if (length != expected.length) {
@@ -42,6 +61,9 @@ public final class FastNbtReader {
 
     /**
      * Reads a UTF-8 string from the current buffer position.
+     *
+     * @param buf Byte buffer positioned at string length prefix
+     * @return Decoded String
      */
     public static String readString(ByteBuffer buf) {
         int len = buf.getShort() & 0xFFFF;
@@ -55,6 +77,9 @@ public final class FastNbtReader {
 
     /**
      * Reads an array of 64-bit longs from the current buffer position.
+     *
+     * @param buf Byte buffer positioned at long array length prefix
+     * @return Array of longs
      */
     public static long[] readLongArray(ByteBuffer buf) {
         int count = buf.getInt();
@@ -70,6 +95,9 @@ public final class FastNbtReader {
 
     /**
      * Skips the entire payload of an arbitrary NBT tag without allocating objects.
+     *
+     * @param buf     Byte buffer positioned immediately before tag payload
+     * @param tagType Tag identifier byte (TAG_BYTE .. TAG_LONG_ARRAY)
      */
     public static void skipTagPayload(ByteBuffer buf, byte tagType) {
         switch (tagType) {

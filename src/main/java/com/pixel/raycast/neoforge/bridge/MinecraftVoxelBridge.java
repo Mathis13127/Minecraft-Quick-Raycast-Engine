@@ -46,10 +46,20 @@ public final class MinecraftVoxelBridge {
 
     private MinecraftVoxelBridge() {}
 
+    /**
+     * Retrieves the global BlockIdRegistry used across Minecraft levels.
+     *
+     * @return Global BlockIdRegistry instance
+     */
     public static BlockIdRegistry getBlockRegistry() {
         return BLOCK_REGISTRY;
     }
 
+    /**
+     * Retrieves the global ShapeRegistry used for sub-voxel collision shapes.
+     *
+     * @return Global ShapeRegistry instance
+     */
     public static ShapeRegistry getShapeRegistry() {
         return SHAPE_REGISTRY;
     }
@@ -141,6 +151,9 @@ public final class MinecraftVoxelBridge {
     /**
      * Retrieves or creates the unified MinecraftVoxelGrid for the specified Level.
      * Automatically hooks up Anvil MCA disk loading if the Level is a ServerLevel with region files.
+     *
+     * @param level Minecraft Level instance
+     * @return MinecraftVoxelGrid bound to this dimension
      */
     public static MinecraftVoxelGrid getOrCreateGrid(Level level) {
         ResourceKey<Level> key = level.dimension();
@@ -174,6 +187,11 @@ public final class MinecraftVoxelBridge {
     /**
      * Compiles a vanilla LevelChunkSection into an optimized VoxelSection and binds it
      * to the LevelChunkSection via IRaycastChunkSection.
+     *
+     * @param vanillaSection Vanilla chunk section instance
+     * @param column         Owning VoxelChunkColumn
+     * @param sectionY       Vertical section index
+     * @return Newly compiled VoxelSection
      */
     public static VoxelSection compileSection(LevelChunkSection vanillaSection, VoxelChunkColumn column, int sectionY) {
         if (vanillaSection == null || vanillaSection.hasOnlyAir()) {
@@ -213,6 +231,12 @@ public final class MinecraftVoxelBridge {
 
     /**
      * Called by the LevelChunkSection mixin on setBlockState to perform instant lock-free dirty tracking.
+     *
+     * @param section  Modified chunk section
+     * @param localX   Block local X [0..15]
+     * @param localY   Block local Y [0..15]
+     * @param localZ   Block local Z [0..15]
+     * @param newState Newly assigned BlockState
      */
     public static void onBlockStateChanged(IRaycastChunkSection section, int localX, int localY, int localZ, BlockState newState) {
         if (section != null) {
@@ -233,6 +257,8 @@ public final class MinecraftVoxelBridge {
 
     /**
      * Clears cached resources when a level unloads.
+     *
+     * @param level Unloaded Level instance
      */
     public static void onLevelUnloaded(Level level) {
         WORLD_GRIDS.remove(level.dimension());

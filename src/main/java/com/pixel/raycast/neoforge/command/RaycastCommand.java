@@ -39,6 +39,11 @@ public final class RaycastCommand {
 
     private RaycastCommand() {}
 
+    /**
+     * Registers the {@code /raycast} command and its alias {@code /qre} into the dispatcher.
+     *
+     * @param dispatcher Command dispatcher instance
+     */
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         var raycastRoot = Commands.literal("raycast")
                 .requires(source -> source.hasPermission(0))

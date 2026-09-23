@@ -7,7 +7,7 @@ import com.pixel.raycast.core.voxel.VoxelFace;
 import com.pixel.raycast.core.voxel.VoxelSection;
 
 /**
- * High-performance 3D Digital Differential Analyzer (Amanatides & Woo).
+ * High-performance 3D Digital Differential Analyzer (Amanatides and Woo).
  * Walks voxel grid boundaries analytically with zero heap allocation.
  */
 public final class VoxelDDA {

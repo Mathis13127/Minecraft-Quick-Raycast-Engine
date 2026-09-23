@@ -17,7 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class VoxelCache implements IVoxelGrid {
 
+    /** Default minimum vertical section Y coordinate (-16, corresponding to Y=-256). */
     public static final int DEFAULT_MIN_SECTION_Y = -16;
+    /** Default maximum vertical section Y coordinate (32, corresponding to Y=512). */
     public static final int DEFAULT_MAX_SECTION_Y = 32;
 
     private final BlockIdRegistry blockIdRegistry;
@@ -29,18 +31,45 @@ public final class VoxelCache implements IVoxelGrid {
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
     private volatile short highestWorldY = Short.MIN_VALUE;
 
+    /**
+     * Constructs a VoxelCache using the given block ID registry with default shape registry and bounds.
+     *
+     * @param blockIdRegistry Registry mapping block identifiers
+     */
     public VoxelCache(BlockIdRegistry blockIdRegistry) {
         this(blockIdRegistry, new ShapeRegistry(), null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
+    /**
+     * Constructs a VoxelCache using the given block ID and shape registries with default bounds.
+     *
+     * @param blockIdRegistry Registry mapping block identifiers
+     * @param shapeRegistry   Registry mapping block collision shapes
+     */
     public VoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry) {
         this(blockIdRegistry, shapeRegistry, null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
+    /**
+     * Constructs a VoxelCache with an offline disk fallback (e.g. MCA region reader) and default bounds.
+     *
+     * @param blockIdRegistry Registry mapping block identifiers
+     * @param shapeRegistry   Registry mapping block collision shapes
+     * @param diskFallback    Underlying disk provider for uncached sections
+     */
     public VoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, IVoxelGrid diskFallback) {
         this(blockIdRegistry, shapeRegistry, diskFallback, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
+    /**
+     * Constructs a fully customized VoxelCache with explicit vertical section bounds.
+     *
+     * @param blockIdRegistry Registry mapping block identifiers
+     * @param shapeRegistry   Registry mapping block collision shapes
+     * @param diskFallback    Underlying disk provider for uncached sections
+     * @param minSectionY     Minimum vertical section coordinate (inclusive, e.g. -16)
+     * @param maxSectionY     Maximum vertical section coordinate (exclusive, e.g. 32)
+     */
     public VoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, IVoxelGrid diskFallback, int minSectionY, int maxSectionY) {
         this.blockIdRegistry = Objects.requireNonNull(blockIdRegistry, "BlockIdRegistry cannot be null");
         this.shapeRegistry = Objects.requireNonNull(shapeRegistry, "ShapeRegistry cannot be null");
@@ -49,6 +78,13 @@ public final class VoxelCache implements IVoxelGrid {
         this.maxSectionY = maxSectionY;
     }
 
+    /**
+     * Computes a 64-bit spatial hash key for chunk coordinates (X, Z).
+     *
+     * @param chunkX Chunk column X coordinate
+     * @param chunkZ Chunk column Z coordinate
+     * @return 64-bit long key
+     */
     public static long chunkKey(int chunkX, int chunkZ) {
         return (((long) chunkX & 0xFFFFFFFFL)) | (((long) chunkZ & 0xFFFFFFFFL) << 32);
     }
@@ -78,6 +114,11 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Stores or updates a VoxelSection at the given section coordinates.
+     *
+     * @param sectionX Section X coordinate
+     * @param sectionY Section Y coordinate
+     * @param sectionZ Section Z coordinate
+     * @param section  VoxelSection to store
      */
     public void putSection(int sectionX, int sectionY, int sectionZ, VoxelSection section) {
         long cKey = chunkKey(sectionX, sectionZ);
@@ -92,6 +133,12 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Atomically modifies a single voxel in world coordinates and updates the corresponding heightmap.
+     *
+     * @param worldX  Absolute block world X coordinate
+     * @param worldY  Absolute block world Y coordinate
+     * @param worldZ  Absolute block world Z coordinate
+     * @param solid   True if voxel is solid matter
+     * @param blockId 16-bit block type identifier
      */
     public void setVoxel(int worldX, int worldY, int worldZ, boolean solid, short blockId) {
         int chunkX = worldX >> 4;
@@ -107,6 +154,10 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Invalidates a single section in the cache.
+     *
+     * @param sectionX Section X coordinate
+     * @param sectionY Section Y coordinate
+     * @param sectionZ Section Z coordinate
      */
     public void invalidateSection(int sectionX, int sectionY, int sectionZ) {
         long cKey = chunkKey(sectionX, sectionZ);
@@ -118,6 +169,9 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Invalidates an entire chunk column from the in-memory cache.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
      */
     public void invalidateChunk(int chunkX, int chunkZ) {
         columns.remove(chunkKey(chunkX, chunkZ));
@@ -125,6 +179,10 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Retrieves or creates the chunk column at the specified chunk coordinates.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return VoxelChunkColumn instance
      */
     public VoxelChunkColumn getOrCreateColumn(int chunkX, int chunkZ) {
         return columns.computeIfAbsent(chunkKey(chunkX, chunkZ), k -> new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY));
@@ -132,6 +190,10 @@ public final class VoxelCache implements IVoxelGrid {
 
     /**
      * Retrieves the chunk column if currently cached in memory, or null otherwise.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return VoxelChunkColumn instance, or null if uncached
      */
     public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
         return columns.get(chunkKey(chunkX, chunkZ));
@@ -167,18 +229,38 @@ public final class VoxelCache implements IVoxelGrid {
         return shapeRegistry;
     }
 
+    /**
+     * Retrieves the underlying BlockIdRegistry.
+     *
+     * @return BlockIdRegistry instance
+     */
     public BlockIdRegistry getBlockIdRegistry() {
         return blockIdRegistry;
     }
 
+    /**
+     * Retrieves the underlying disk fallback grid, or null if none.
+     *
+     * @return Disk IVoxelGrid or null
+     */
     public IVoxelGrid getDiskFallback() {
         return diskFallback;
     }
 
+    /**
+     * Gets the total number of chunk columns currently loaded in memory.
+     *
+     * @return Cached column count
+     */
     public int getCachedColumnCount() {
         return columns.size();
     }
 
+    /**
+     * Gets the total number of non-empty voxel sections currently cached in memory.
+     *
+     * @return Cached section count
+     */
     public int getCachedSectionCount() {
         int count = 0;
         for (VoxelChunkColumn col : columns.values()) {
@@ -187,6 +269,9 @@ public final class VoxelCache implements IVoxelGrid {
         return count;
     }
 
+    /**
+     * Evicts all cached columns and resets the highest world Y tracker.
+     */
     public void clear() {
         columns.clear();
         highestWorldY = Short.MIN_VALUE;

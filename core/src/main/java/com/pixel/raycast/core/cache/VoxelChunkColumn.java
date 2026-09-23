@@ -20,6 +20,14 @@ public final class VoxelChunkColumn {
     private final AtomicReferenceArray<VoxelSection> sections;
     private final Heightmap2D heightmap;
 
+    /**
+     * Constructs a chunk column for the given coordinates and section bounds.
+     *
+     * @param chunkX      Chunk column X coordinate
+     * @param chunkZ      Chunk column Z coordinate
+     * @param minSectionY Minimum section Y coordinate
+     * @param maxSectionY Maximum section Y coordinate
+     */
     public VoxelChunkColumn(int chunkX, int chunkZ, int minSectionY, int maxSectionY) {
         if (maxSectionY <= minSectionY) {
             throw new IllegalArgumentException("maxSectionY (" + maxSectionY + ") must be greater than minSectionY (" + minSectionY + ")");
@@ -33,26 +41,56 @@ public final class VoxelChunkColumn {
         this.heightmap = new Heightmap2D();
     }
 
+    /**
+     * Gets the chunk X coordinate.
+     *
+     * @return Chunk X
+     */
     public int getChunkX() {
         return chunkX;
     }
 
+    /**
+     * Gets the chunk Z coordinate.
+     *
+     * @return Chunk Z
+     */
     public int getChunkZ() {
         return chunkZ;
     }
 
+    /**
+     * Gets the minimum vertical section Y coordinate.
+     *
+     * @return Minimum section Y
+     */
     public int getMinSectionY() {
         return minSectionY;
     }
 
+    /**
+     * Gets the maximum vertical section Y coordinate.
+     *
+     * @return Maximum section Y
+     */
     public int getMaxSectionY() {
         return maxSectionY;
     }
 
+    /**
+     * Gets the total vertical section capacity.
+     *
+     * @return Total section count
+     */
     public int getSectionCount() {
         return sectionCount;
     }
 
+    /**
+     * Gets the 2D heightmap for this chunk column.
+     *
+     * @return Heightmap2D instance
+     */
     public Heightmap2D getHeightmap() {
         return heightmap;
     }
@@ -73,6 +111,9 @@ public final class VoxelChunkColumn {
 
     /**
      * Atomically assigns a VoxelSection at the given section Y coordinate and updates the column heightmap.
+     *
+     * @param sectionY Vertical section index
+     * @param section  VoxelSection to assign
      */
     public void setSection(int sectionY, VoxelSection section) {
         int index = sectionY - minSectionY;
@@ -119,6 +160,11 @@ public final class VoxelChunkColumn {
 
     /**
      * Handles heightmap adjustments when a single voxel state changes.
+     *
+     * @param localX Column local X [0..15]
+     * @param worldY Block world Y
+     * @param localZ Column local Z [0..15]
+     * @param solid  True if solid
      */
     public void onVoxelChanged(int localX, int worldY, int localZ, boolean solid) {
         if (solid) {
@@ -133,6 +179,9 @@ public final class VoxelChunkColumn {
 
     /**
      * Scans downwards from the highest section to recompute the maximum solid altitude for a column.
+     *
+     * @param localX Column local X [0..15]
+     * @param localZ Column local Z [0..15]
      */
     public void recomputeHeight(int localX, int localZ) {
         short foundY = Heightmap2D.VOID_Y;
@@ -157,6 +206,8 @@ public final class VoxelChunkColumn {
 
     /**
      * Counts how many non-null sections are currently cached in this column.
+     *
+     * @return Number of allocated VoxelSections
      */
     public int getCachedSectionCount() {
         int count = 0;

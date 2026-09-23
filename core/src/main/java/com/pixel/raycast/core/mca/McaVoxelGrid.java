@@ -23,23 +23,56 @@ public final class McaVoxelGrid implements IVoxelGrid {
     private final Path regionDirectory;
     private short highestWorldY = Short.MIN_VALUE;
 
+    /**
+     * Constructs an McaVoxelGrid with an in-memory block registry.
+     *
+     * @param registry BlockIdRegistry to map block state names
+     */
     public McaVoxelGrid(BlockIdRegistry registry) {
         this(registry, null);
     }
 
+    /**
+     * Constructs an McaVoxelGrid with an optional on-disk region directory for lazy-loading.
+     *
+     * @param registry        BlockIdRegistry to map block state names
+     * @param regionDirectory Root directory containing .mca region files, or null
+     */
     public McaVoxelGrid(BlockIdRegistry registry, Path regionDirectory) {
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
         this.regionDirectory = regionDirectory;
     }
 
+    /**
+     * Computes a 64-bit spatial hash key for 3D section coordinates.
+     *
+     * @param sx Section X coordinate
+     * @param sy Section Y coordinate
+     * @param sz Section Z coordinate
+     * @return 64-bit packed section key
+     */
     public static long sectionKey(int sx, int sy, int sz) {
         return (((long) sx & 0x3FFFFFL)) | (((long) sz & 0x3FFFFFL) << 22) | (((long) sy & 0xFFFFFL) << 44);
     }
 
+    /**
+     * Computes a 64-bit spatial hash key for 2D region coordinates.
+     *
+     * @param rx Region X coordinate
+     * @param rz Region Z coordinate
+     * @return 64-bit packed region key
+     */
     public static long regionKey(int rx, int rz) {
         return (((long) rx & 0xFFFFFFFFL)) | (((long) rz & 0xFFFFFFFFL) << 32);
     }
 
+    /**
+     * Computes a 64-bit spatial hash key for 2D chunk coordinates.
+     *
+     * @param cx Chunk column X coordinate
+     * @param cz Chunk column Z coordinate
+     * @return 64-bit packed chunk key
+     */
     public static long chunkKey(int cx, int cz) {
         return (((long) cx & 0xFFFFFFFFL)) | (((long) cz & 0xFFFFFFFFL) << 32);
     }
@@ -61,12 +94,19 @@ public final class McaVoxelGrid implements IVoxelGrid {
         return shapeRegistry;
     }
 
+    /**
+     * Gets the underlying block identifier registry.
+     *
+     * @return BlockIdRegistry instance
+     */
     public BlockIdRegistry getRegistry() {
         return registry;
     }
 
     /**
      * Registers an open MCA region file into this voxel grid.
+     *
+     * @param reader Region reader instance to register
      */
     public void registerRegion(McaRegionReader reader) {
         Objects.requireNonNull(reader, "McaRegionReader cannot be null");
@@ -79,6 +119,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
      *
      * @param reader Region reader to load
      * @return Total number of sections loaded into memory
+     * @throws IOException If I/O or decompression fails
      */
     public int preloadRegion(McaRegionReader reader) throws IOException {
         registerRegion(reader);
@@ -113,6 +154,11 @@ public final class McaVoxelGrid implements IVoxelGrid {
 
     /**
      * Loads a specific world chunk into cache from registered regions.
+     *
+     * @param chunkX World chunk column X
+     * @param chunkZ World chunk column Z
+     * @return Number of sections parsed and cached
+     * @throws IOException If reading from disk fails
      */
     public int loadChunk(int chunkX, int chunkZ) throws IOException {
         int rx = chunkX >> 5;
@@ -171,10 +217,18 @@ public final class McaVoxelGrid implements IVoxelGrid {
         return null;
     }
 
+    /**
+     * Gets the total number of non-empty voxel sections currently in memory.
+     *
+     * @return Cached section count
+     */
     public int getCachedSectionCount() {
         return sectionCache.size();
     }
 
+    /**
+     * Clears all cached voxel sections from memory.
+     */
     public void clearCache() {
         sectionCache.clear();
     }

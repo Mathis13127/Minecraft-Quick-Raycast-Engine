@@ -14,13 +14,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class BlockIdRegistry {
 
+    /** Numeric identifier reserved for non-solid air (0). */
     public static final short AIR_ID = 0;
+    /** Standard vanilla air identifier string. */
     public static final String AIR_NAME = "minecraft:air";
 
     private final ConcurrentHashMap<String, Short> nameToId = new ConcurrentHashMap<>();
     private final List<String> idToName = Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger nextId = new AtomicInteger(1);
 
+    /**
+     * Constructs a BlockIdRegistry with air pre-registered at ID 0.
+     */
     public BlockIdRegistry() {
         // Reserve index 0 for air
         nameToId.put(AIR_NAME, AIR_ID);
@@ -79,13 +84,18 @@ public final class BlockIdRegistry {
 
     /**
      * Checks if the given numeric ID corresponds to an air (non-solid) block.
+     *
+     * @param blockId 16-bit block ID to check
+     * @return True if air (ID 0)
      */
-    public static boolean isAir(short blockId) {
-        return blockId == AIR_ID;
-    }
+     public static boolean isAir(short blockId) {
+         return blockId == AIR_ID;
+     }
 
     /**
      * Total number of registered unique blocks.
+     *
+     * @return Registered block count
      */
     public int size() {
         return idToName.size();

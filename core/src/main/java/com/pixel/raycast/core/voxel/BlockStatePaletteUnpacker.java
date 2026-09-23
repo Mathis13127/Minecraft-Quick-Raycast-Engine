@@ -98,6 +98,10 @@ public final class BlockStatePaletteUnpacker {
 
     /**
      * Efficiently builds a section directly with verified solid count.
+     *
+     * @param paletteIds Array of 16-bit block IDs corresponding to each palette index
+     * @param data       Packed long array containing bit fields
+     * @return Newly constructed VoxelSection
      */
     public static VoxelSection unpackDirect(short[] paletteIds, long[] data) {
         if (paletteIds == null || paletteIds.length == 0) {

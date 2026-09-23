@@ -24,15 +24,31 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
     private final Level level;
     private final VoxelCache cache;
 
+    /**
+     * Constructs a MinecraftVoxelGrid binding a live Level to a VoxelCache.
+     *
+     * @param level Live Minecraft level
+     * @param cache Backing spatial cache
+     */
     public MinecraftVoxelGrid(Level level, VoxelCache cache) {
         this.level = Objects.requireNonNull(level, "Level cannot be null");
         this.cache = Objects.requireNonNull(cache, "VoxelCache cannot be null");
     }
 
+    /**
+     * Retrieves the associated live Minecraft Level.
+     *
+     * @return Level instance
+     */
     public Level getLevel() {
         return level;
     }
 
+    /**
+     * Retrieves the backing VoxelCache.
+     *
+     * @return VoxelCache instance
+     */
     public VoxelCache getCache() {
         return cache;
     }
