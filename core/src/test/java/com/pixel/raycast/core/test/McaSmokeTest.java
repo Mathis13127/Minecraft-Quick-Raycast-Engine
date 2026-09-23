@@ -25,6 +25,9 @@ public class McaSmokeTest {
     void testReadMcaHeaderAndScanBlocks() throws Exception {
         File file = new File("src/test/resources/region/r.0.0.mca");
         if (!file.exists()) {
+            file = new File("core/src/test/resources/region/r.0.0.mca");
+        }
+        if (!file.exists()) {
             file = new File("raycast-core/src/test/resources/region/r.0.0.mca");
         }
         assertTrue(file.exists(), "Region file r.0.0.mca must exist in test resources");

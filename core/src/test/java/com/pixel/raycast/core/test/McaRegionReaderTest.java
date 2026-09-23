@@ -16,6 +16,7 @@ public class McaRegionReaderTest {
     void testParseRegionCoordinates() throws IOException {
         BlockIdRegistry registry = new BlockIdRegistry();
         File file00 = new File("src/test/resources/region/r.0.0.mca");
+        if (!file00.exists()) file00 = new File("core/src/test/resources/region/r.0.0.mca");
         if (!file00.exists()) file00 = new File("raycast-core/src/test/resources/region/r.0.0.mca");
 
         try (McaRegionReader reader = new McaRegionReader(file00.toPath(), registry)) {
@@ -25,6 +26,7 @@ public class McaRegionReaderTest {
         }
 
         File file20 = new File("src/test/resources/region/r.2.0.mca");
+        if (!file20.exists()) file20 = new File("core/src/test/resources/region/r.2.0.mca");
         if (!file20.exists()) file20 = new File("raycast-core/src/test/resources/region/r.2.0.mca");
 
         try (McaRegionReader reader = new McaRegionReader(file20.toPath(), registry)) {

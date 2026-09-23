@@ -38,6 +38,9 @@ public class VoxelCacheBenchmarkTest {
         registry = new BlockIdRegistry();
         File file = new File("src/test/resources/region/r.0.0.mca");
         if (!file.exists()) {
+            file = new File("core/src/test/resources/region/r.0.0.mca");
+        }
+        if (!file.exists()) {
             file = new File("raycast-core/src/test/resources/region/r.0.0.mca");
         }
         assertTrue(file.exists(), "r.0.0.mca fixture must exist");
