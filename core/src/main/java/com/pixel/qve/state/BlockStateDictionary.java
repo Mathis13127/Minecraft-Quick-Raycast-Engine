@@ -4,6 +4,7 @@ import com.pixel.qve.mca.FastNbtReader;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +18,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Employs a zero-allocation L1 hash cache to resolve 64-bit composite state keys
  * {@code (nameHash << 32 | propsHash)} in ~2 CPU cycles directly from raw byte buffers,
  * eliminating heap String allocations during MCA chunk decompression.
+ * <p>
+ * Backed by a two-level hierarchical {@link PropertyIndexRegistry} enabling O(1) integer property
+ * lookups without text decoding.
  */
 public final class BlockStateDictionary {
 
@@ -31,6 +35,7 @@ public final class BlockStateDictionary {
     private final Map<Short, String> idToCanonicalState = new ConcurrentHashMap<>();
 
     private final BlockIdRegistry blockRegistry;
+    private final PropertyIndexRegistry propertyRegistry = new PropertyIndexRegistry();
 
     /**
      * Constructs a BlockStateDictionary bound to the given BlockIdRegistry.
@@ -39,6 +44,15 @@ public final class BlockStateDictionary {
      */
     public BlockStateDictionary(BlockIdRegistry blockRegistry) {
         this.blockRegistry = Objects.requireNonNull(blockRegistry, "BlockIdRegistry cannot be null");
+    }
+
+    /**
+     * Retrieves the underlying PropertyIndexRegistry for decomposed property queries.
+     *
+     * @return PropertyIndexRegistry instance
+     */
+    public PropertyIndexRegistry getPropertyRegistry() {
+        return propertyRegistry;
     }
 
     /**
@@ -93,6 +107,7 @@ public final class BlockStateDictionary {
 
     /**
      * Stores a resolved state key to block ID mapping into both L1 cache and concurrent store.
+     * Automatically decomposes bracketed properties into the PropertyIndexRegistry.
      *
      * @param stateKey       64-bit composite state key
      * @param blockId        16-bit block ID
@@ -102,6 +117,11 @@ public final class BlockStateDictionary {
         stateKeyToId.put(stateKey, blockId);
         if (canonicalState != null) {
             idToCanonicalState.put(blockId, canonicalState);
+            int bStart = canonicalState.indexOf('[');
+            int bEnd = canonicalState.lastIndexOf(']');
+            if (bStart >= 0 && bEnd > bStart) {
+                parseAndRegisterPropertiesString(blockId, canonicalState.substring(bStart + 1, bEnd));
+            }
         }
 
         int hash = (int) (stateKey ^ (stateKey >>> 32));
@@ -114,6 +134,28 @@ public final class BlockStateDictionary {
         StateRegistrationListener listener = this.registrationListener;
         if (listener != null && canonicalState != null) {
             listener.onStateRegistered(blockId, canonicalState);
+        }
+    }
+
+    private void parseAndRegisterPropertiesString(short blockId, String propsString) {
+        if (propsString.isEmpty()) return;
+        String[] parts = propsString.split(",");
+        byte[] pairs = new byte[parts.length * 2];
+        int idx = 0;
+        for (String part : parts) {
+            int eq = part.indexOf('=');
+            if (eq > 0) {
+                String k = part.substring(0, eq).trim();
+                String v = part.substring(eq + 1).trim();
+                byte kId = propertyRegistry.getOrRegisterKey(k);
+                byte vId = propertyRegistry.getOrRegisterValue(kId, v);
+                pairs[idx++] = kId;
+                pairs[idx++] = vId;
+            }
+        }
+        if (idx > 0) {
+            byte[] finalPairs = (idx == pairs.length) ? pairs : Arrays.copyOf(pairs, idx);
+            propertyRegistry.registerBlockProperties(blockId, finalPairs);
         }
     }
 
@@ -267,7 +309,69 @@ public final class BlockStateDictionary {
     }
 
     /**
-     * Clears cached L1 and concurrent entries.
+     * Retrieves the property value ID for a given block ID and property key ID.
+     *
+     * @param blockId 16-bit block ID
+     * @param keyId   8-bit property key ID
+     * @return 8-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
+     */
+    public byte getPropertyValue(short blockId, byte keyId) {
+        return propertyRegistry.getPropertyValue(blockId, keyId);
+    }
+
+    /**
+     * Retrieves the property value ID for a given block ID and property key name (e.g. "facing").
+     *
+     * @param blockId 16-bit block ID
+     * @param keyName Property key name
+     * @return 8-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
+     */
+    public byte getPropertyValue(short blockId, String keyName) {
+        byte keyId = propertyRegistry.getKeyId(keyName);
+        if (keyId == PropertyIndexRegistry.NO_VALUE) {
+            return PropertyIndexRegistry.NO_VALUE;
+        }
+        return propertyRegistry.getPropertyValue(blockId, keyId);
+    }
+
+    /**
+     * Checks if a block ID possesses the specified property.
+     *
+     * @param blockId 16-bit block ID
+     * @param keyName Property key name
+     * @return True if present
+     */
+    public boolean hasProperty(short blockId, String keyName) {
+        return getPropertyValue(blockId, keyName) != PropertyIndexRegistry.NO_VALUE;
+    }
+
+    /**
+     * Gets the human-readable string value for a block ID and property key name.
+     *
+     * @param blockId 16-bit block ID
+     * @param keyName Property key name
+     * @return Value string, or null if absent
+     */
+    public String getPropertyValueName(short blockId, String keyName) {
+        byte keyId = propertyRegistry.getKeyId(keyName);
+        if (keyId == PropertyIndexRegistry.NO_VALUE) {
+            return null;
+        }
+        return propertyRegistry.getPropertyValueName(blockId, keyId);
+    }
+
+    /**
+     * Formats the properties of a block ID into a canonical bracketed string representation (e.g. "[facing=north,half=bottom]").
+     *
+     * @param blockId 16-bit block ID
+     * @return Formatted string, or empty string if no properties
+     */
+    public String formatProperties(short blockId) {
+        return propertyRegistry.formatProperties(blockId);
+    }
+
+    /**
+     * Clears cached L1, concurrent entries, and the decomposed property registry.
      */
     public synchronized void clear() {
         java.util.Arrays.fill(hashKeys, 0L);
@@ -275,6 +379,7 @@ public final class BlockStateDictionary {
         java.util.Arrays.fill(occupied, 0L);
         stateKeyToId.clear();
         idToCanonicalState.clear();
+        propertyRegistry.clear();
     }
 
     /**

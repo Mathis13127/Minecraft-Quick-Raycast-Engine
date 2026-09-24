@@ -123,17 +123,18 @@ public final class QveCommand {
         int registeredBlocks = MinecraftVoxelBridge.getBlockRegistry().size();
         int registeredStates = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().size();
         int registeredShapes = MinecraftVoxelBridge.getShapeRegistry().getCustomShapeCount();
+        int registeredKeys = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().getPropertyRegistry().getKeyCount();
 
         source.sendSuccess(() -> Component.literal(String.format(
                 "§6=== [Quick Voxel Engine: Cache Telemetry] ===\n" +
                 "§7Dimension: §f%s\n" +
                 "§7Cached Columns: §e%,d §7| Cached Sections: §b%,d\n" +
                 "§7Estimated RAM Footprint: §a%.2f KB §7(§a%.2f MB§7)\n" +
-                "§7Block Types: §f%d §7| State Variants: §f%d §7| Custom Shapes: §f%d",
+                "§7Block Types: §f%d §7| State Variants: §f%d §7| Property Keys: §e%d §7| Custom Shapes: §f%d",
                 level.dimension().location(),
                 columns, sections,
                 memoryEstimateKb, memoryEstimateMb,
-                registeredBlocks, registeredStates, registeredShapes
+                registeredBlocks, registeredStates, registeredKeys, registeredShapes
         )), false);
 
         return 1;
@@ -188,15 +189,18 @@ public final class QveCommand {
         boolean isLoadedInRam = col != null && col.getSection(pos.getY() >> 4) != null;
         boolean hasBlockEntity = level.getBlockEntity(pos) != null;
 
+        String formattedProps = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().formatProperties(blockId);
+        String propsDisplay = formattedProps.isEmpty() ? "§7None" : "§e" + formattedProps;
+
         source.sendSuccess(() -> Component.literal(String.format(
                 "§6=== [Quick Voxel Engine: Inspect @ %d, %d, %d] ===\n" +
                 "§7Block: §b%s §7(ID: §e%d§7)\n" +
-                "§7State: §f%s\n" +
+                "§7Properties: %s\n" +
                 "§7Solid: %s §7| RAM Cached: %s §7| BlockEntity: %s\n" +
                 "§7Collision Model: §6%s §7(Sub-Boxes: §f%d§7)",
                 pos.getX(), pos.getY(), pos.getZ(),
                 blockKey, blockId,
-                state.toString(),
+                propsDisplay,
                 solid ? "§aYES" : "§cNO",
                 isLoadedInRam ? "§aYES" : "§7NO",
                 hasBlockEntity ? "§aYES" : "§7NO",
