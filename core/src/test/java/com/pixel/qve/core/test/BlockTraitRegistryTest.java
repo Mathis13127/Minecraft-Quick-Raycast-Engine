@@ -27,24 +27,28 @@ class BlockTraitRegistryTest {
         int stoneId = 1;
         registry.setTraits(stoneId, BlockTraits.TERRAIN_SOLID);
         assertTrue(registry.isTerrainSolid(stoneId));
+        assertTrue(registry.isSurfaceMeshable(stoneId));
         assertFalse(registry.isPassThrough(stoneId));
         assertFalse(registry.isPartialShape(stoneId));
 
         int flowerId = 2;
         registry.setTraits(flowerId, BlockTraits.PASS_THROUGH);
         assertFalse(registry.isTerrainSolid(flowerId));
+        assertFalse(registry.isSurfaceMeshable(flowerId));
         assertTrue(registry.isPassThrough(flowerId));
         assertFalse(registry.isPartialShape(flowerId));
 
         int slabId = 3;
         registry.setTraits(slabId, BlockTraits.PARTIAL_SHAPE);
         assertFalse(registry.isTerrainSolid(slabId));
+        assertFalse(registry.isSurfaceMeshable(slabId));
         assertFalse(registry.isPassThrough(slabId));
         assertTrue(registry.isPartialShape(slabId));
 
         int waterId = 4;
         registry.setTraits(waterId, (byte) (BlockTraits.FLUID | BlockTraits.TRANSLUCENT | BlockTraits.PASS_THROUGH));
         assertFalse(registry.isTerrainSolid(waterId));
+        assertTrue(registry.isSurfaceMeshable(waterId));
         assertTrue(registry.isFluid(waterId));
         assertTrue(registry.isTranslucent(waterId));
         assertTrue(registry.isPassThrough(waterId));
@@ -52,6 +56,7 @@ class BlockTraitRegistryTest {
         int leavesId = 5;
         registry.setTraits(leavesId, (byte) (BlockTraits.TERRAIN_SOLID | BlockTraits.FOLIAGE));
         assertTrue(registry.isTerrainSolid(leavesId));
+        assertTrue(registry.isSurfaceMeshable(leavesId));
     }
 
     @Test

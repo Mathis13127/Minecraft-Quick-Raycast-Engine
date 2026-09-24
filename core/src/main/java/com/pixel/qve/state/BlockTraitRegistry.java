@@ -72,6 +72,28 @@ public final class BlockTraitRegistry {
     }
 
     /**
+     * Fast-path check: returns true if the block ID represents a visible world surface
+     * suitable for cubic surface meshing (solid terrain or fluid).
+     * Explicitly excludes non-solid decorations, partial shapes (slabs, stairs, snow layers), and air.
+     *
+     * @param blockId 32-bit block ID
+     * @return True if block is a meshable surface
+     */
+    public boolean isSurfaceMeshable(int blockId) {
+        if (blockId == BlockIdRegistry.AIR_ID) {
+            return false;
+        }
+        byte[] local = this.traits;
+        if (blockId >= 0 && blockId < local.length) {
+            byte t = local[blockId];
+            if (t != 0) {
+                return (t & (BlockTraits.TERRAIN_SOLID | BlockTraits.FLUID)) != 0;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Fast-path check: returns true if the block is a non-solid decoration (flowers, grass, torches, rails).
      *
      * @param blockId 32-bit block ID

@@ -303,15 +303,15 @@ public final class MinecraftVoxelBridge {
             if (mcShape.isEmpty()) {
                 // Non-solid pass-through decoration (grass, flowers, torches, rails, saplings, etc.)
                 traits |= BlockTraits.PASS_THROUGH;
-            } else if (state.canOcclude() && state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
-                // Fully opaque 1x1x1 cube (stone, dirt, grass, planks, ores)
+            } else if (state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
+                // Full 1x1x1 cube (stone, dirt, grass, planks, ores, ice, glass, etc.)
                 traits |= BlockTraits.TERRAIN_SOLID;
+                if (!state.canOcclude()) {
+                    traits |= BlockTraits.TRANSLUCENT;
+                }
             } else if (state.is(net.minecraft.tags.BlockTags.LEAVES)) {
                 // Tree canopy foliage: full cube with cutout texture
                 traits |= (BlockTraits.TERRAIN_SOLID | BlockTraits.FOLIAGE);
-            } else if (state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
-                // Full block but non-occluding (glass, ice, sea lantern)
-                traits |= BlockTraits.TRANSLUCENT;
             } else {
                 // Partial geometry (slabs, stairs, fences, walls, thin snow layers, trapdoors)
                 traits |= BlockTraits.PARTIAL_SHAPE;
