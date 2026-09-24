@@ -25,14 +25,10 @@ public class RaycastHudTrackerTest {
     public void testHudSessionState() {
         RaycastHudTracker.HudSession session = new RaycastHudTracker.HudSession(99_999.0);
         assertEquals(99_999.0, session.getMaxDistance(), 1e-6);
-        assertEquals(RaycastHudTracker.HudDisplayMode.BOTH, session.getMode());
         assertFalse(session.getInFlight().get(), "In-flight should initially be false");
 
         session.setMaxDistance(500.0);
         assertEquals(500.0, session.getMaxDistance(), 1e-6);
-
-        session.setMode(RaycastHudTracker.HudDisplayMode.CARD);
-        assertEquals(RaycastHudTracker.HudDisplayMode.CARD, session.getMode());
 
         assertTrue(session.getInFlight().compareAndSet(false, true));
         assertTrue(session.getInFlight().get());

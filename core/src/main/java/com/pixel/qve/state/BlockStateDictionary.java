@@ -93,6 +93,12 @@ public final class BlockStateDictionary {
      */
     @FunctionalInterface
     public interface StateRegistrationListener {
+        /**
+         * Invoked whenever a new blockstate variant is registered in the dictionary.
+         *
+         * @param blockId        The registered 32-bit block ID
+         * @param canonicalState The canonical string representation of the state
+         */
         void onStateRegistered(int blockId, String canonicalState);
     }
 

@@ -21,7 +21,10 @@ public final class PropertyIndexRegistry {
     /** Sentinel value indicating that a property or value is absent. */
     public static final short NO_VALUE = -1;
 
+    /** Maximum allowed distinct property keys (65,536). */
     public static final int MAX_KEYS = 65536;
+
+    /** Maximum allowed distinct property values per key (65,536). */
     public static final int MAX_VALUES_PER_KEY = 65536;
     private static final int INITIAL_KEY_CAPACITY = 256;
     private static final int INITIAL_BLOCK_CAPACITY = 1024;
@@ -54,6 +57,9 @@ public final class PropertyIndexRegistry {
     // Block ID to packed property pairs ((keyId << 16) | valId)
     private volatile int[][] blockProperties = new int[INITIAL_BLOCK_CAPACITY][];
 
+    /**
+     * Constructs a new PropertyIndexRegistry initialized with fast L1 hash caches.
+     */
     public PropertyIndexRegistry() {
         Arrays.fill(l1KeyIds, NO_VALUE);
         Arrays.fill(l1ValIds, NO_VALUE);

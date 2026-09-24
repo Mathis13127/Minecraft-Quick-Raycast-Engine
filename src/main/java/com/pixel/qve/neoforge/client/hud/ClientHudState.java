@@ -7,6 +7,7 @@ import com.pixel.qve.neoforge.network.ClientboundRaycastHudPayload;
  */
 public final class ClientHudState {
 
+    /** Singleton instance of the client HUD state. */
     public static final ClientHudState INSTANCE = new ClientHudState();
 
     private volatile ClientboundRaycastHudPayload latestPayload;

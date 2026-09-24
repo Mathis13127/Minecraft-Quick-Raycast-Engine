@@ -109,6 +109,11 @@ public final class VoxelWarmupEngine {
 
     /**
      * Immutable statistics record detailing warmup performance.
+     *
+     * @param blockCount       Total number of registered block types
+     * @param stateCount       Total number of indexed blockstate variants
+     * @param propertyKeyCount Total number of indexed property keys
+     * @param elapsedMs        Duration of the warmup pass in milliseconds
      */
     public record WarmupStats(int blockCount, int stateCount, int propertyKeyCount, double elapsedMs) {}
 }

@@ -67,9 +67,10 @@ public final class ClientHudRenderer {
                     payload.blockX(), payload.blockY(), payload.blockZ()
             ));
 
-            // Line 3: Block Registry Name + 32-bit ID
+            // Line 3: Block Registry Name + 32-bit ID (cleaned of any duplicate blockstates)
+            String cleanName = cleanBlockName(payload.blockName());
             lines.add(String.format("§7Block:  §b%s §8(ID: §f%d§8)",
-                    payload.blockName(),
+                    cleanName,
                     payload.blockId()
             ));
 
@@ -117,5 +118,26 @@ public final class ClientHudRenderer {
         for (int i = 0; i < lines.size(); i++) {
             guiGraphics.drawString(font, lines.get(i), x + paddingX + 2, y + paddingY + i * lineHeight, 0xFFFFFFFF, false);
         }
+    }
+
+    /**
+     * Cleans the raw block name string by removing embedded blockstate brackets or "Block{...}" wrapper.
+     *
+     * @param rawName Raw block name string
+     * @return Clean canonical registry name (e.g. "minecraft:spruce_leaves")
+     */
+    public static String cleanBlockName(String rawName) {
+        if (rawName == null || rawName.isEmpty()) {
+            return "unknown";
+        }
+        String name = rawName;
+        int bracketIdx = name.indexOf('[');
+        if (bracketIdx != -1) {
+            name = name.substring(0, bracketIdx);
+        }
+        if (name.startsWith("Block{") && name.endsWith("}")) {
+            name = name.substring(6, name.length() - 1);
+        }
+        return name;
     }
 }

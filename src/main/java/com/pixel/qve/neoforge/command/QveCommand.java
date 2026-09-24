@@ -102,13 +102,6 @@ public final class QveCommand {
                                 .executes(ctx -> RaycastHudTracker.executeOn(ctx, RaycastHudTracker.DEFAULT_MAX_DISTANCE))
                                 .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1, 1_000_000.0))
                                         .executes(ctx -> RaycastHudTracker.executeOn(ctx, DoubleArgumentType.getDouble(ctx, "distance")))))
-                        .then(Commands.literal("mode")
-                                .then(Commands.literal("card")
-                                        .executes(ctx -> RaycastHudTracker.executeSetMode(ctx, RaycastHudTracker.HudDisplayMode.CARD)))
-                                .then(Commands.literal("actionbar")
-                                        .executes(ctx -> RaycastHudTracker.executeSetMode(ctx, RaycastHudTracker.HudDisplayMode.ACTIONBAR)))
-                                .then(Commands.literal("both")
-                                        .executes(ctx -> RaycastHudTracker.executeSetMode(ctx, RaycastHudTracker.HudDisplayMode.BOTH))))
                         .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1, 1_000_000.0))
                                 .executes(ctx -> RaycastHudTracker.executeToggleDistance(ctx, DoubleArgumentType.getDouble(ctx, "distance")))));
 

@@ -12,6 +12,19 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 /**
  * Server-to-Client packet carrying real-time raycast telemetry data
  * for the dedicated client-side HUD overlay.
+ *
+ * @param active      Whether the HUD tracking session is active
+ * @param hit         Whether the raycast impacted a solid voxel
+ * @param elapsedNs   Raycast calculation latency in nanoseconds
+ * @param distance    Distance to the impact point in blocks
+ * @param blockX      Impact block X coordinate
+ * @param blockY      Impact block Y coordinate
+ * @param blockZ      Impact block Z coordinate
+ * @param face        Struck block face name
+ * @param blockId     32-bit block identifier
+ * @param blockName   Canonical block registry name
+ * @param properties  Formatted blockstates properties string
+ * @param maxDistance Configured maximum reach distance
  */
 public record ClientboundRaycastHudPayload(
         boolean active,
