@@ -10,6 +10,8 @@ import com.pixel.qve.mca.McaVoxelGrid;
 import com.pixel.qve.state.ShapeRegistry;
 import com.pixel.qve.state.VoxelShape;
 import com.pixel.qve.state.BlockIdRegistry;
+import com.pixel.qve.state.BlockTraits;
+import com.pixel.qve.state.BlockTraitRegistry;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -43,6 +45,7 @@ public final class MinecraftVoxelBridge {
 
     private static final BlockIdRegistry BLOCK_REGISTRY = new BlockIdRegistry();
     private static final ShapeRegistry SHAPE_REGISTRY = new ShapeRegistry();
+    private static final BlockTraitRegistry TRAIT_REGISTRY = new BlockTraitRegistry();
     private static final Map<BlockState, Integer> STATE_TO_ID = new ConcurrentHashMap<>();
     private static volatile int[] STATE_ID_ARRAY = new int[32768];
     private static final Map<ResourceKey<Level>, MinecraftVoxelGrid> WORLD_GRIDS = new ConcurrentHashMap<>();
@@ -65,6 +68,15 @@ public final class MinecraftVoxelBridge {
      */
     public static ShapeRegistry getShapeRegistry() {
         return SHAPE_REGISTRY;
+    }
+
+    /**
+     * Retrieves the global BlockTraitRegistry used for physical/optical block traits.
+     *
+     * @return Global BlockTraitRegistry instance
+     */
+    public static BlockTraitRegistry getTraitRegistry() {
+        return TRAIT_REGISTRY;
     }
 
     /**
@@ -122,6 +134,8 @@ public final class MinecraftVoxelBridge {
         if (shape != VoxelShape.FULL_CUBE) {
             SHAPE_REGISTRY.registerShape(id, shape);
         }
+        byte traits = resolveTraitsForState(state, block, shape);
+        TRAIT_REGISTRY.setTraits(id, traits);
 
         var propRegistry = BLOCK_REGISTRY.getStateDictionary().getPropertyRegistry();
         var values = state.getValues();
@@ -173,6 +187,8 @@ public final class MinecraftVoxelBridge {
                 if (shape != VoxelShape.FULL_CUBE) {
                     SHAPE_REGISTRY.registerShape(blockId, shape);
                 }
+                byte traits = resolveTraitsForState(state, state.getBlock(), shape);
+                TRAIT_REGISTRY.setTraits(blockId, traits);
             }
         } catch (Throwable t) {
             LOGGER.debug("Could not resolve dynamic shape for state {}: {}", canonicalState, t.getMessage());
@@ -259,6 +275,55 @@ public final class MinecraftVoxelBridge {
         }
     }
 
+    private static byte resolveTraitsForState(BlockState state, Block block, VoxelShape shape) {
+        if (state == null || state.isAir()) {
+            return (byte) (BlockTraits.INVISIBLE | BlockTraits.PASS_THROUGH);
+        }
+
+        byte traits = 0;
+
+        // 1. Invisible render shape
+        if (state.getRenderShape() == net.minecraft.world.level.block.RenderShape.INVISIBLE) {
+            traits |= BlockTraits.INVISIBLE;
+        }
+
+        // 2. Fluid matter
+        if (!state.getFluidState().isEmpty()) {
+            traits |= BlockTraits.FLUID;
+            traits |= BlockTraits.TRANSLUCENT;
+            traits |= BlockTraits.PASS_THROUGH;
+            return traits;
+        }
+
+        // 3. Collision shape and solidity classification
+        try {
+            net.minecraft.world.phys.shapes.VoxelShape mcShape =
+                    state.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO);
+
+            if (mcShape.isEmpty()) {
+                // Non-solid pass-through decoration (grass, flowers, torches, rails, saplings, etc.)
+                traits |= BlockTraits.PASS_THROUGH;
+            } else if (state.canOcclude() && state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
+                // Fully opaque 1x1x1 cube (stone, dirt, grass, planks, ores)
+                traits |= BlockTraits.TERRAIN_SOLID;
+            } else if (state.is(net.minecraft.tags.BlockTags.LEAVES)) {
+                // Tree canopy foliage: full cube with cutout texture
+                traits |= (BlockTraits.TERRAIN_SOLID | BlockTraits.FOLIAGE);
+            } else if (state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
+                // Full block but non-occluding (glass, ice, sea lantern)
+                traits |= BlockTraits.TRANSLUCENT;
+            } else {
+                // Partial geometry (slabs, stairs, fences, walls, thin snow layers, trapdoors)
+                traits |= BlockTraits.PARTIAL_SHAPE;
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("Failed to dynamically compute block traits for state {}: {}", state, t.getMessage());
+            traits |= BlockTraits.TERRAIN_SOLID;
+        }
+
+        return traits;
+    }
+
     /**
      * Retrieves or creates the unified MinecraftVoxelGrid for the specified Level.
      * Automatically hooks up Anvil MCA disk loading if the Level is a ServerLevel with region files.
@@ -293,7 +358,7 @@ public final class MinecraftVoxelBridge {
 
         int minSectionY = level.getMinSection();
         int maxSectionY = level.getMaxSection();
-        UnifiedVoxelCache cache = new UnifiedVoxelCache(BLOCK_REGISTRY, SHAPE_REGISTRY, diskFallback, minSectionY, maxSectionY);
+        UnifiedVoxelCache cache = new UnifiedVoxelCache(BLOCK_REGISTRY, SHAPE_REGISTRY, TRAIT_REGISTRY, diskFallback, minSectionY, maxSectionY);
         return new MinecraftVoxelGrid(level, cache);
     }
 

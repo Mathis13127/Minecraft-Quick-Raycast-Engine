@@ -28,6 +28,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
 
     private final BlockIdRegistry blockIdRegistry;
     private final ShapeRegistry shapeRegistry;
+    private final com.pixel.qve.state.BlockTraitRegistry traitRegistry;
     private volatile IVoxelWorld diskFallback;
     private final int minSectionY;
     private final int maxSectionY;
@@ -45,7 +46,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param blockIdRegistry Registry mapping block identifiers
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry) {
-        this(blockIdRegistry, new ShapeRegistry(), null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
+        this(blockIdRegistry, new ShapeRegistry(), new com.pixel.qve.state.BlockTraitRegistry(), null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
     /**
@@ -55,7 +56,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param shapeRegistry   Registry mapping block collision shapes
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry) {
-        this(blockIdRegistry, shapeRegistry, null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
+        this(blockIdRegistry, shapeRegistry, new com.pixel.qve.state.BlockTraitRegistry(), null, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
     /**
@@ -66,7 +67,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param diskFallback    Underlying disk provider for uncached sections
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, IVoxelWorld diskFallback) {
-        this(blockIdRegistry, shapeRegistry, diskFallback, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
+        this(blockIdRegistry, shapeRegistry, new com.pixel.qve.state.BlockTraitRegistry(), diskFallback, DEFAULT_MIN_SECTION_Y, DEFAULT_MAX_SECTION_Y);
     }
 
     /**
@@ -79,8 +80,23 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param maxSectionY     Maximum vertical section coordinate (exclusive, e.g. 32)
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, IVoxelWorld diskFallback, int minSectionY, int maxSectionY) {
+        this(blockIdRegistry, shapeRegistry, new com.pixel.qve.state.BlockTraitRegistry(), diskFallback, minSectionY, maxSectionY);
+    }
+
+    /**
+     * Constructs a fully customized UnifiedVoxelCache with explicit trait registry and vertical section bounds.
+     *
+     * @param blockIdRegistry Registry mapping block identifiers
+     * @param shapeRegistry   Registry mapping block collision shapes
+     * @param traitRegistry   Registry mapping physical/optical block traits
+     * @param diskFallback    Underlying disk provider for uncached sections
+     * @param minSectionY     Minimum vertical section coordinate (inclusive, e.g. -16)
+     * @param maxSectionY     Maximum vertical section coordinate (exclusive, e.g. 32)
+     */
+    public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, com.pixel.qve.state.BlockTraitRegistry traitRegistry, IVoxelWorld diskFallback, int minSectionY, int maxSectionY) {
         this.blockIdRegistry = Objects.requireNonNull(blockIdRegistry, "BlockIdRegistry cannot be null");
         this.shapeRegistry = Objects.requireNonNull(shapeRegistry, "ShapeRegistry cannot be null");
+        this.traitRegistry = (traitRegistry != null) ? traitRegistry : new com.pixel.qve.state.BlockTraitRegistry();
         this.diskFallback = diskFallback;
         this.minSectionY = minSectionY;
         this.maxSectionY = maxSectionY;
@@ -256,6 +272,11 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
     @Override
     public ShapeRegistry getShapeRegistry() {
         return shapeRegistry;
+    }
+
+    @Override
+    public com.pixel.qve.state.BlockTraitRegistry getTraitRegistry() {
+        return traitRegistry;
     }
 
     /**

@@ -109,6 +109,15 @@ public interface IVoxelWorld {
     }
 
     /**
+     * Retrieves the optional block trait registry for physical/optical block state classification.
+     *
+     * @return BlockTraitRegistry instance, or null if unsupported
+     */
+    default com.pixel.qve.state.BlockTraitRegistry getTraitRegistry() {
+        return null;
+    }
+
+    /**
      * Checks if the specified 512x512 block region (32x32 chunks) is entirely absent or empty.
      *
      * @param regionX Region X coordinate (world block X &gt;&gt; 9)

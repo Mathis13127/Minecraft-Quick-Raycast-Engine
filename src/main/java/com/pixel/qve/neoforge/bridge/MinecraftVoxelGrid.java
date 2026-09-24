@@ -366,6 +366,11 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
     }
 
     @Override
+    public com.pixel.qve.state.BlockTraitRegistry getTraitRegistry() {
+        return cache.getTraitRegistry();
+    }
+
+    @Override
     public com.pixel.qve.api.nbt.INbtService getNbtService() {
         return new com.pixel.qve.api.nbt.INbtService() {
             @Override
