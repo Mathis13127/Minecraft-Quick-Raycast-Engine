@@ -87,7 +87,7 @@ public final class BlockTraitRegistry {
         if (blockId >= 0 && blockId < local.length) {
             byte t = local[blockId];
             if (t != 0) {
-                return (t & (BlockTraits.TERRAIN_SOLID | BlockTraits.FLUID)) != 0;
+                return (t & (BlockTraits.TERRAIN_SOLID | BlockTraits.FLUID | BlockTraits.PARTIAL_SHAPE)) != 0;
             }
         }
         return true;

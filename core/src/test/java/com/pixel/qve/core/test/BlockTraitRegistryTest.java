@@ -41,7 +41,7 @@ class BlockTraitRegistryTest {
         int slabId = 3;
         registry.setTraits(slabId, BlockTraits.PARTIAL_SHAPE);
         assertFalse(registry.isTerrainSolid(slabId));
-        assertFalse(registry.isSurfaceMeshable(slabId));
+        assertTrue(registry.isSurfaceMeshable(slabId));
         assertFalse(registry.isPassThrough(slabId));
         assertTrue(registry.isPartialShape(slabId));
 
