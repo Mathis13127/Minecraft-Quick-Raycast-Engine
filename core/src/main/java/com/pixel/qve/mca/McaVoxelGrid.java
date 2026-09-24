@@ -152,15 +152,10 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             return col;
         }
 
-        if (loadedChunks.contains(cKey)) {
-            return null; // Chunk is already loaded and empty/non-existent
-        }
-
         int rx = chunkX >> 5;
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
-            loadedChunks.add(cKey);
             return null;
         }
 
@@ -392,13 +387,12 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
 
         int lockIndex = (int) ((cKey ^ (cKey >>> 8) ^ (cKey >>> 16)) & 0xFF);
         synchronized (chunkLocks[lockIndex]) {
-            if (columnCache.containsKey(cKey) || loadedChunks.contains(cKey)) {
+            if (columnCache.containsKey(cKey)) {
                 return 0;
             }
 
             McaRegionReader reader = getOrOpenRegion(rx, rz);
             if (reader == null) {
-                loadedChunks.add(cKey);
                 return 0;
             }
             updateBounds(rx, rz);
@@ -424,8 +418,8 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
                 l1Keys[slot] = cKey;
                 l1Columns[slot] = column;
+                loadedChunks.add(cKey);
             }
-            loadedChunks.add(cKey);
             return parsed;
         }
     }
@@ -476,28 +470,26 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      */
     public McaRegionReader getOrOpenRegion(int rx, int rz) {
         long rKey = regionKey(rx, rz);
-        if (missingRegions.contains(rKey)) {
-            return null;
+        McaRegionReader reader = regions.get(rKey);
+        if (reader != null) {
+            return reader;
         }
 
-        return regions.computeIfAbsent(rKey, k -> {
-            if (regionDirectory != null) {
-                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-                if (java.nio.file.Files.exists(mcaFile)) {
-                    try {
-                        return new McaRegionReader(mcaFile, registry, shapeRegistry);
-                    } catch (IOException e) {
-                        LOGGER.log(System.Logger.Level.WARNING,
-                                "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
-                        missingRegions.add(k);
-                        return null;
-                    }
-                } else {
-                    missingRegions.add(k);
+        if (regionDirectory != null) {
+            Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+            if (java.nio.file.Files.exists(mcaFile)) {
+                try {
+                    McaRegionReader newReader = new McaRegionReader(mcaFile, registry, shapeRegistry);
+                    regions.put(rKey, newReader);
+                    return newReader;
+                } catch (IOException e) {
+                    LOGGER.log(System.Logger.Level.WARNING,
+                            "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
+                    return null;
                 }
             }
-            return null;
-        });
+        }
+        return null;
     }
 
     @Override
