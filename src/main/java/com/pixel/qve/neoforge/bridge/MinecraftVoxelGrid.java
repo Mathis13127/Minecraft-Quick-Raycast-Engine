@@ -80,6 +80,18 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
             if (ca instanceof LevelChunk lc) {
                 return lc;
             }
+            if (net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
+                try {
+                    net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                    if (mc != null && mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+                        ServerLevel serverLevel = mc.getSingleplayerServer().getLevel(level.dimension());
+                        if (serverLevel != null) {
+                            return serverLevel.getChunkSource().getChunkNow(chunkX, chunkZ);
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
         }
         return null;
     }
@@ -134,6 +146,20 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         if (chunk != null) {
             VoxelChunkColumn newCol = cache.getOrCreateColumn(chunkX, chunkZ);
             populateHeightmapIfEmpty(chunk, newCol, chunkX, chunkZ);
+
+            int minSecY = level.getMinSection();
+            int maxSecY = level.getMaxSection();
+            LevelChunkSection[] sections = chunk.getSections();
+            for (int sy = minSecY; sy <= maxSecY; sy++) {
+                int blockY = sy << 4;
+                int secIdx = chunk.getSectionIndex(blockY);
+                if (secIdx >= 0 && secIdx < sections.length) {
+                    LevelChunkSection sec = sections[secIdx];
+                    if (sec != null && !sec.hasOnlyAir()) {
+                        MinecraftVoxelBridge.compileSection(sec, newCol, sy);
+                    }
+                }
+            }
             return newCol;
         }
 
