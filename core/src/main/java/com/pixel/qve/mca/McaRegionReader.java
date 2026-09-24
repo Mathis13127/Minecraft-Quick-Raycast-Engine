@@ -51,7 +51,7 @@ public final class McaRegionReader implements Closeable {
     private final Path filePath;
     private final RandomAccessFile raf;
     private final FileChannel channel;
-    private final MappedByteBuffer mmap;
+    private volatile MappedByteBuffer mmap;
     private final int regionX;
     private final int regionZ;
     private final int[] sectorOffsets = new int[1024];
@@ -155,6 +155,30 @@ public final class McaRegionReader implements Closeable {
     }
 
     /**
+     * Refreshes the 4KB sector offset table and expands mmap buffer if Minecraft has
+     * written new chunks or appended sectors to this region file while running.
+     */
+    public synchronized void refreshHeaderIfPossible() {
+        try {
+            long currentSize = channel.size();
+            if (currentSize < 4096) {
+                return;
+            }
+            if (currentSize > mmap.capacity()) {
+                this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, currentSize);
+            }
+            MappedByteBuffer curMmap = this.mmap;
+            for (int i = 0; i < 1024; i++) {
+                int val = curMmap.getInt(i * 4);
+                int sectorOffset = (val >>> 8) & 0xFFFFFF;
+                int sectorCount = val & 0xFF;
+                sectorOffsets[i] = (sectorCount > 0) ? sectorOffset : 0;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * Checks if the given local chunk (0..31, 0..31) is generated in this region.
      *
      * @param localChunkX Local chunk X [0..31]
@@ -165,7 +189,12 @@ public final class McaRegionReader implements Closeable {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
             return false;
         }
-        return sectorOffsets[localChunkX + localChunkZ * 32] != 0;
+        int idx = localChunkX + localChunkZ * 32;
+        if (sectorOffsets[idx] != 0) {
+            return true;
+        }
+        refreshHeaderIfPossible();
+        return sectorOffsets[idx] != 0;
     }
 
     /**
@@ -329,28 +358,42 @@ public final class McaRegionReader implements Closeable {
     }
 
     private ByteBuffer decompressChunk(int localChunkX, int localChunkZ) {
-        int sectorOffset = sectorOffsets[localChunkX + localChunkZ * 32];
+        int idx = localChunkX + localChunkZ * 32;
+        int sectorOffset = sectorOffsets[idx];
         if (sectorOffset == 0) {
-            return null; // Chunk is not generated in this region
+            refreshHeaderIfPossible();
+            sectorOffset = sectorOffsets[idx];
+            if (sectorOffset == 0) {
+                return null; // Chunk is not generated in this region
+            }
         }
 
         long filePos = (long) sectorOffset * 4096L;
-        if (filePos + 5 > mmap.capacity()) {
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "Corrupted sector offset {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
-                    sectorOffset, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
-            return null;
+        MappedByteBuffer curMmap = this.mmap;
+        if (filePos + 5 > curMmap.capacity()) {
+            refreshHeaderIfPossible();
+            curMmap = this.mmap;
+            if (filePos + 5 > curMmap.capacity()) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Corrupted sector offset {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                        sectorOffset, filePath, localChunkX, localChunkZ, filePos, curMmap.capacity());
+                return null;
+            }
         }
 
-        int length = mmap.getInt((int) filePos);
-        if (length <= 0 || (filePos + 4 + length) > mmap.capacity()) {
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "Invalid payload length {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
-                    length, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
-            return null;
+        int length = curMmap.getInt((int) filePos);
+        if (length <= 0 || (filePos + 4 + length) > curMmap.capacity()) {
+            refreshHeaderIfPossible();
+            curMmap = this.mmap;
+            if (length <= 0 || (filePos + 4 + length) > curMmap.capacity()) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Invalid payload length {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                        length, filePath, localChunkX, localChunkZ, filePos, curMmap.capacity());
+                return null;
+            }
         }
 
-        int rawCompressionType = mmap.get((int) filePos + 4) & 0xFF;
+        int rawCompressionType = curMmap.get((int) filePos + 4) & 0xFF;
         boolean isExternal = (rawCompressionType & 128) != 0;
         int compressionType = rawCompressionType & 0x7F;
 
@@ -403,7 +446,7 @@ public final class McaRegionReader implements Closeable {
             }
 
             if (compressionType == 2) { // ZLIB / DEFLATE
-                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
+                ByteBuffer compressedSlice = curMmap.slice((int) filePos + 5, payloadLength);
                 ByteBuffer target = DECOMPRESS_BUFFER.get();
                 target.clear();
                 Inflater inflater = INFLATER_CACHE.get();
@@ -430,9 +473,9 @@ public final class McaRegionReader implements Closeable {
                     return null;
                 }
             } else if (compressionType == 3) { // Uncompressed
-                return mmap.slice((int) filePos + 5, payloadLength);
+                return curMmap.slice((int) filePos + 5, payloadLength);
             } else if (compressionType == 1) { // GZIP
-                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
+                ByteBuffer compressedSlice = curMmap.slice((int) filePos + 5, payloadLength);
                 byte[] raw = new byte[payloadLength];
                 compressedSlice.get(raw);
                 try (java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw))) {

@@ -156,7 +156,11 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
-            return null;
+            if (regionDirectory != null && java.nio.file.Files.exists(regionDirectory.resolve("r." + rx + "." + rz + ".mca"))) {
+                missingRegions.remove(rKey);
+            } else {
+                return null;
+            }
         }
 
         if (regions.containsKey(rKey) || regionDirectory != null) {
@@ -250,19 +254,17 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     @Override
     public boolean isRegionEmpty(int regionX, int regionZ) {
         long rk = regionKey(regionX, regionZ);
-        if (missingRegions.contains(rk)) {
-            return true;
-        }
         if (regions.containsKey(rk)) {
             return false;
         }
         if (regionDirectory != null) {
             Path mcaFile = regionDirectory.resolve("r." + regionX + "." + regionZ + ".mca");
-            if (!java.nio.file.Files.exists(mcaFile)) {
-                missingRegions.add(rk);
-                return true;
+            if (java.nio.file.Files.exists(mcaFile)) {
+                missingRegions.remove(rk);
+                return false;
             }
-            return false;
+            missingRegions.add(rk);
+            return true;
         }
         return true;
     }
@@ -381,8 +383,11 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
-            loadedChunks.add(cKey);
-            return 0;
+            if (regionDirectory != null && java.nio.file.Files.exists(regionDirectory.resolve("r." + rx + "." + rz + ".mca"))) {
+                missingRegions.remove(rKey);
+            } else {
+                return 0;
+            }
         }
 
         int lockIndex = (int) ((cKey ^ (cKey >>> 8) ^ (cKey >>> 16)) & 0xFF);
