@@ -128,4 +128,49 @@ public interface IVoxelGrid {
     default boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
         return false;
     }
+
+    /**
+     * Checks if the world grid has known horizontal boundaries (e.g. from generated regions or simulation radius).
+     *
+     * @return True if horizontal world bounds are available
+     */
+    default boolean hasWorldBounds() {
+        return false;
+    }
+
+    /**
+     * Minimum known world block X coordinate containing potential solid geometry.
+     *
+     * @return Minimum world X
+     */
+    default int getWorldMinX() {
+        return Integer.MIN_VALUE;
+    }
+
+    /**
+     * Maximum known world block X coordinate containing potential solid geometry.
+     *
+     * @return Maximum world X
+     */
+    default int getWorldMaxX() {
+        return Integer.MAX_VALUE;
+    }
+
+    /**
+     * Minimum known world block Z coordinate containing potential solid geometry.
+     *
+     * @return Minimum world Z
+     */
+    default int getWorldMinZ() {
+        return Integer.MIN_VALUE;
+    }
+
+    /**
+     * Maximum known world block Z coordinate containing potential solid geometry.
+     *
+     * @return Maximum world Z
+     */
+    default int getWorldMaxZ() {
+        return Integer.MAX_VALUE;
+    }
 }

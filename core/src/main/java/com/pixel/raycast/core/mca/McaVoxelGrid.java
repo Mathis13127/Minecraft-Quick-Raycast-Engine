@@ -285,6 +285,31 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         return false;
     }
 
+    @Override
+    public boolean hasWorldBounds() {
+        return minBlockX <= maxBlockX && minBlockZ <= maxBlockZ;
+    }
+
+    @Override
+    public int getWorldMinX() {
+        return minBlockX;
+    }
+
+    @Override
+    public int getWorldMaxX() {
+        return maxBlockX;
+    }
+
+    @Override
+    public int getWorldMinZ() {
+        return minBlockZ;
+    }
+
+    @Override
+    public int getWorldMaxZ() {
+        return maxBlockZ;
+    }
+
     /**
      * Pre-loads all chunks from a region into the in-memory cache for maximum raycast speed.
      *

@@ -236,4 +236,44 @@ public class McaRealWorldBenchmarkTest {
 
         assertTrue(opsPerSec >= 500_000.0, "Void 99,999m raycast throughput expected >= 500,000 ops/s, got: " + opsPerSec);
     }
+
+    @Test
+    void testPlayerCrosshairSkyRaycast99999mBenchmark() {
+        final int RAYS = 100_000;
+        RayHitResult result = new RayHitResult();
+        Random rng = new Random(12345);
+
+        // Warmup: player standing at Y=70 looking up at various sky angles
+        for (int i = 0; i < 5_000; i++) {
+            double yaw = rng.nextDouble() * 2.0 * Math.PI;
+            double pitch = rng.nextDouble() * 0.8 + 0.1; // 5.7 degrees to 51.5 degrees up
+            double dx = Math.cos(pitch) * Math.cos(yaw);
+            double dy = Math.sin(pitch);
+            double dz = Math.cos(pitch) * Math.sin(yaw);
+            VoxelDDA.trace(128.0, 70.0, 128.0, dx, dy, dz, 99_999.0, grid, result);
+        }
+
+        long start = System.nanoTime();
+        long misses = 0;
+        for (int i = 0; i < RAYS; i++) {
+            double yaw = rng.nextDouble() * 2.0 * Math.PI;
+            double pitch = rng.nextDouble() * 0.8 + 0.1; // up towards the sky
+            double dx = Math.cos(pitch) * Math.cos(yaw);
+            double dy = Math.sin(pitch);
+            double dz = Math.cos(pitch) * Math.sin(yaw);
+            if (!VoxelDDA.trace(128.0, 70.0, 128.0, dx, dy, dz, 99_999.0, grid, result)) {
+                misses++;
+            }
+        }
+        long elapsed = System.nanoTime() - start;
+        double secs = elapsed / 1_000_000_000.0;
+        double opsPerSec = RAYS / secs;
+        double nsPerRay = (double) elapsed / RAYS;
+
+        System.out.printf("[SCENARIO C: 99,999m SKY CROSSHAIR] Executed %d rays of 99,999m into sky in %.3f s%n", RAYS, secs);
+        System.out.printf("[SCENARIO C: 99,999m SKY CROSSHAIR] Misses: %d / %d%n", misses, RAYS);
+        System.out.printf("[SCENARIO C: 99,999m SKY CROSSHAIR] Throughput: %,.0f rays/second (%.1f ns/ray)%n", opsPerSec, nsPerRay);
+
+        assertTrue(opsPerSec >= 1_000_000.0, "Sky Crosshair 99,999m throughput expected >= 1,000,000 ops/s, got: " + opsPerSec);
+    }
 }

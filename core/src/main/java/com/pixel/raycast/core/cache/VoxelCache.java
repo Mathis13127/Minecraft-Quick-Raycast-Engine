@@ -288,6 +288,31 @@ public final class VoxelCache implements IVoxelGrid {
         return false;
     }
 
+    @Override
+    public boolean hasWorldBounds() {
+        return diskFallback != null && diskFallback.hasWorldBounds();
+    }
+
+    @Override
+    public int getWorldMinX() {
+        return (diskFallback != null) ? diskFallback.getWorldMinX() : Integer.MIN_VALUE;
+    }
+
+    @Override
+    public int getWorldMaxX() {
+        return (diskFallback != null) ? diskFallback.getWorldMaxX() : Integer.MAX_VALUE;
+    }
+
+    @Override
+    public int getWorldMinZ() {
+        return (diskFallback != null) ? diskFallback.getWorldMinZ() : Integer.MIN_VALUE;
+    }
+
+    @Override
+    public int getWorldMaxZ() {
+        return (diskFallback != null) ? diskFallback.getWorldMaxZ() : Integer.MAX_VALUE;
+    }
+
     /**
      * Gets the total number of chunk columns currently loaded in memory.
      *

@@ -66,10 +66,81 @@ public final class VoxelDDA {
             return false;
         }
 
+        // Determine step direction along each axis
+        int stepX = (dirX > 0) ? 1 : ((dirX < 0) ? -1 : 0);
+        int stepY = (dirY > 0) ? 1 : ((dirY < 0) ? -1 : 0);
+        int stepZ = (dirZ > 0) ? 1 : ((dirZ < 0) ? -1 : 0);
+
+        short highestWorldY = grid.getHighestWorldY();
+        short lowestWorldY = grid.getLowestWorldY();
+
+        // Dynamic Analytical Ray-AABB vertical Y-slab truncation (datapacks / custom dimensions compatible)
+        double tExit = maxDist;
+        if (lowestWorldY > Short.MIN_VALUE && highestWorldY < Short.MAX_VALUE) {
+            double worldMinY = (double) lowestWorldY;
+            double worldMaxY = (double) highestWorldY + 1.0;
+
+            if (stepY > 0) {
+                if (startY >= worldMaxY) {
+                    return false; // Pointing up above ceiling
+                }
+                double tExitY = (worldMaxY - startY) / dirY;
+                if (tExitY < tExit) tExit = tExitY;
+            } else if (stepY < 0) {
+                if (startY < worldMinY) {
+                    return false; // Pointing down below floor
+                }
+                double tExitY = (worldMinY - startY) / dirY;
+                if (tExitY < tExit) tExit = tExitY;
+            } else {
+                if (startY < worldMinY || startY >= worldMaxY) {
+                    return false; // Completely outside vertical limits
+                }
+            }
+        }
+
+        // Dynamic Analytical Ray-AABB horizontal X/Z bounding truncation
+        if (grid.hasWorldBounds()) {
+            double worldMinX = grid.getWorldMinX();
+            double worldMaxX = grid.getWorldMaxX();
+            double worldMinZ = grid.getWorldMinZ();
+            double worldMaxZ = grid.getWorldMaxZ();
+
+            if (stepX > 0) {
+                if (startX >= worldMaxX) return false;
+                double tExitX = (worldMaxX - startX) / dirX;
+                if (tExitX < tExit) tExit = tExitX;
+            } else if (stepX < 0) {
+                if (startX < worldMinX) return false;
+                double tExitX = (worldMinX - startX) / dirX;
+                if (tExitX < tExit) tExit = tExitX;
+            } else {
+                if (startX < worldMinX || startX >= worldMaxX) return false;
+            }
+
+            if (stepZ > 0) {
+                if (startZ >= worldMaxZ) return false;
+                double tExitZ = (worldMaxZ - startZ) / dirZ;
+                if (tExitZ < tExit) tExit = tExitZ;
+            } else if (stepZ < 0) {
+                if (startZ < worldMinZ) return false;
+                double tExitZ = (worldMinZ - startZ) / dirZ;
+                if (tExitZ < tExit) tExit = tExitZ;
+            } else {
+                if (startZ < worldMinZ || startZ >= worldMaxZ) return false;
+            }
+        }
+
+        if (tExit <= 0.0) {
+            return false;
+        }
+        if (tExit < maxDist) {
+            maxDist = tExit;
+        }
+
         // Instant O(1) global sky culling if ray stays above all solid geometry in the world
         double endY = startY + maxDist * dirY;
         double minRayY = Math.min(startY, endY);
-        short highestWorldY = grid.getHighestWorldY();
         if (highestWorldY > Short.MIN_VALUE && highestWorldY < Short.MAX_VALUE && minRayY >= (highestWorldY + 1.0)) {
             return false; // Zero DDA steps: ray never descends to any solid altitude
         }
@@ -104,11 +175,6 @@ public final class VoxelDDA {
             currentSection = grid.getSection(currentSx, currentSy, currentSz);
         }
 
-        // Determine step direction along each axis
-        int stepX = (dirX > 0) ? 1 : ((dirX < 0) ? -1 : 0);
-        int stepY = (dirY > 0) ? 1 : ((dirY < 0) ? -1 : 0);
-        int stepZ = (dirZ > 0) ? 1 : ((dirZ < 0) ? -1 : 0);
-
         // Instant O(1) out-of-bounds culling if start point is already outside world heading away
         int x0 = (int) Math.floor(startX);
         int z0 = (int) Math.floor(startZ);
@@ -132,7 +198,6 @@ public final class VoxelDDA {
 
         // Chunk tracking registers across horizontal traversal
         com.pixel.raycast.core.voxel.Heightmap2D currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
-        short lowestWorldY = grid.getLowestWorldY();
 
         // Point-blank check: start position inside voxel with shape precision
         if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
@@ -154,6 +219,12 @@ public final class VoxelDDA {
 
                 // 0. Out-of-bounds termination: ray left all known geometry heading into void
                 if (grid.isOutOfBounds(x, z, stepX, stepZ)) {
+                    break;
+                }
+                if (stepY > 0 && y > highestWorldY) {
+                    break;
+                }
+                if (stepY < 0 && y < lowestWorldY) {
                     break;
                 }
 
@@ -387,6 +458,13 @@ public final class VoxelDDA {
                 break;
             }
 
+            if (stepY > 0 && y > highestWorldY) {
+                break;
+            }
+            if (stepY < 0 && y < lowestWorldY) {
+                break;
+            }
+
             // Update cached section if crossed chunk section boundary
             int sx = x >> 4;
             int sy = y >> 4;
@@ -450,15 +528,15 @@ public final class VoxelDDA {
                                            com.pixel.raycast.core.shape.SubBox.SubBoxHit subHitOut,
                                            RayHitResult result) {
         com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry = grid.getShapeRegistry();
-        com.pixel.raycast.core.shape.VoxelShape shape = (shapeRegistry != null) ? shapeRegistry.getShape(blockId) : com.pixel.raycast.core.shape.VoxelShape.FULL_CUBE;
-
-        if (shape.isFullCube()) {
+        if (shapeRegistry == null || shapeRegistry.isFullCube(blockId)) {
             double hitX = startX + tEntry * dirX;
             double hitY = startY + tEntry * dirY;
             double hitZ = startZ + tEntry * dirZ;
             result.set(true, hitX, hitY, hitZ, x, y, z, entryFace, blockId, tEntry);
             return true;
         }
+
+        com.pixel.raycast.core.shape.VoxelShape shape = shapeRegistry.getShape(blockId);
 
         // Sub-box intersection
         double localOx = startX - x;

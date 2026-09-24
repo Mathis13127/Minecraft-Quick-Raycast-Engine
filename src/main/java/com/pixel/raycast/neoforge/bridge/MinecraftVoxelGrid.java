@@ -202,42 +202,123 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         return cache.isOutOfBounds(worldBlockX, worldBlockZ, stepX, stepZ);
     }
 
+    private static final class PlayerBounds {
+        final int minX, maxX, minZ, maxZ;
+        final long gameTime;
+
+        PlayerBounds(int minX, int maxX, int minZ, int maxZ, long gameTime) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+            this.gameTime = gameTime;
+        }
+    }
+
+    private volatile PlayerBounds cachedPlayerBounds = new PlayerBounds(0, 0, 0, 0, -1);
+
+    private PlayerBounds getOrComputePlayerBounds() {
+        if (!(level instanceof ServerLevel sl)) {
+            return cachedPlayerBounds;
+        }
+        long currentTime = sl.getGameTime();
+        PlayerBounds current = cachedPlayerBounds;
+        if (current.gameTime == currentTime) {
+            return current;
+        }
+
+        int minX = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+
+        for (net.minecraft.server.level.ServerPlayer player : sl.players()) {
+            int px = player.getBlockX();
+            int pz = player.getBlockZ();
+            if (px < minX) minX = px;
+            if (px > maxX) maxX = px;
+            if (pz < minZ) minZ = pz;
+            if (pz > maxZ) maxZ = pz;
+        }
+
+        net.minecraft.core.BlockPos spawn = sl.getSharedSpawnPos();
+        int sx = spawn.getX();
+        int sz = spawn.getZ();
+        if (sx < minX) minX = sx;
+        if (sx > maxX) maxX = sx;
+        if (sz < minZ) minZ = sz;
+        if (sz > maxZ) maxZ = sz;
+
+        // Expand bounds by 1024 blocks (simulation/render distance buffer)
+        PlayerBounds updated = new PlayerBounds(minX - 1024, maxX + 1024, minZ - 1024, maxZ + 1024, currentTime);
+        cachedPlayerBounds = updated;
+        return updated;
+    }
+
     private boolean hasLiveChunksInRegion(int regionX, int regionZ) {
-        if (level instanceof ServerLevel sl) {
-            for (net.minecraft.server.level.ServerPlayer player : sl.players()) {
-                int prx = player.getBlockX() >> 9;
-                int prz = player.getBlockZ() >> 9;
-                if (Math.abs(prx - regionX) <= 1 && Math.abs(prz - regionZ) <= 1) {
-                    return true;
-                }
-            }
-            net.minecraft.core.BlockPos spawn = sl.getSharedSpawnPos();
-            int srx = spawn.getX() >> 9;
-            int srz = spawn.getZ() >> 9;
-            if (Math.abs(srx - regionX) <= 1 && Math.abs(srz - regionZ) <= 1) {
-                return true;
-            }
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            int regMinX = regionX << 9;
+            int regMaxX = (regionX + 1) << 9;
+            int regMinZ = regionZ << 9;
+            int regMaxZ = (regionZ + 1) << 9;
+            return !(regMaxX <= b.minX || regMinX >= b.maxX || regMaxZ <= b.minZ || regMinZ >= b.maxZ);
         }
         return false;
     }
 
     private boolean isNearLiveChunks(int worldBlockX, int worldBlockZ) {
-        if (level instanceof ServerLevel sl) {
-            for (net.minecraft.server.level.ServerPlayer player : sl.players()) {
-                int dx = Math.abs(player.getBlockX() - worldBlockX);
-                int dz = Math.abs(player.getBlockZ() - worldBlockZ);
-                if (dx <= 1024 && dz <= 1024) {
-                    return true;
-                }
-            }
-            net.minecraft.core.BlockPos spawn = sl.getSharedSpawnPos();
-            int dx = Math.abs(spawn.getX() - worldBlockX);
-            int dz = Math.abs(spawn.getZ() - worldBlockZ);
-            if (dx <= 1024 && dz <= 1024) {
-                return true;
-            }
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            return worldBlockX >= b.minX && worldBlockX <= b.maxX &&
+                   worldBlockZ >= b.minZ && worldBlockZ <= b.maxZ;
         }
         return false;
+    }
+
+    @Override
+    public boolean hasWorldBounds() {
+        return (level instanceof ServerLevel) || cache.hasWorldBounds();
+    }
+
+    @Override
+    public int getWorldMinX() {
+        int diskMin = cache.getWorldMinX();
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            return Math.min(diskMin, b.minX);
+        }
+        return diskMin;
+    }
+
+    @Override
+    public int getWorldMaxX() {
+        int diskMax = cache.getWorldMaxX();
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            return Math.max(diskMax, b.maxX);
+        }
+        return diskMax;
+    }
+
+    @Override
+    public int getWorldMinZ() {
+        int diskMin = cache.getWorldMinZ();
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            return Math.min(diskMin, b.minZ);
+        }
+        return diskMin;
+    }
+
+    @Override
+    public int getWorldMaxZ() {
+        int diskMax = cache.getWorldMaxZ();
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            return Math.max(diskMax, b.maxZ);
+        }
+        return diskMax;
     }
 
     @Override
