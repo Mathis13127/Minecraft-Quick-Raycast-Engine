@@ -22,5 +22,6 @@ public class RaycastCommandTest {
         assertNotNull(raycast.getChild("benchmark"), "Subcommand 'benchmark' should exist");
         assertNotNull(raycast.getChild("benchmark_mca"), "Subcommand 'benchmark_mca' should exist");
         assertNotNull(raycast.getChild("cache"), "Subcommand 'cache' should exist");
+        assertNotNull(raycast.getChild("hud"), "Subcommand 'hud' should exist");
     }
 }

@@ -30,6 +30,7 @@ public class RaycastEngineMod {
     public RaycastEngineMod(IEventBus modEventBus) {
         LOGGER.info("[RaycastEngine] Initializing Ultra-Fast Raycast Engine for Minecraft 1.21.1...");
         NeoForge.EVENT_BUS.register(this);
+        NeoForge.EVENT_BUS.register(com.pixel.raycast.neoforge.hud.RaycastHudTracker.class);
     }
 
     /**

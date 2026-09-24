@@ -13,6 +13,7 @@ import com.pixel.raycast.core.traversal.VoxelDDA;
 import com.pixel.raycast.neoforge.api.VoxelRaycastAPI;
 import com.pixel.raycast.neoforge.bridge.MinecraftVoxelBridge;
 import com.pixel.raycast.neoforge.bridge.MinecraftVoxelGrid;
+import com.pixel.raycast.neoforge.hud.RaycastHudTracker;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
@@ -68,6 +69,16 @@ public final class RaycastCommand {
                                                         IntegerArgumentType.getInteger(ctx, "regionX"),
                                                         IntegerArgumentType.getInteger(ctx, "regionZ"),
                                                         IntegerArgumentType.getInteger(ctx, "rays")))))))
+                .then(Commands.literal("hud")
+                        .executes(RaycastHudTracker::executeToggleDefault)
+                        .then(Commands.literal("off")
+                                .executes(RaycastHudTracker::executeOff))
+                        .then(Commands.literal("on")
+                                .executes(ctx -> RaycastHudTracker.executeOn(ctx, RaycastHudTracker.DEFAULT_MAX_DISTANCE))
+                                .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1, 1_000_000.0))
+                                        .executes(ctx -> RaycastHudTracker.executeOn(ctx, DoubleArgumentType.getDouble(ctx, "distance")))))
+                        .then(Commands.argument("distance", DoubleArgumentType.doubleArg(0.1, 1_000_000.0))
+                                .executes(ctx -> RaycastHudTracker.executeToggleDistance(ctx, DoubleArgumentType.getDouble(ctx, "distance")))))
                 .then(Commands.literal("cache")
                         .then(Commands.literal("stats")
                                 .executes(RaycastCommand::executeCacheStats))
