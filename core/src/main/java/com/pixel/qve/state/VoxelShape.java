@@ -18,6 +18,10 @@ public final class VoxelShape {
     public static final VoxelShape EMPTY = new VoxelShape(new SubBox[0], false);
     /** Standard solid 1x1x1 full cube shape. */
     public static final VoxelShape FULL_CUBE = new VoxelShape(new SubBox[]{SubBox.FULL}, true);
+    /** Standard calm source fluid shape [0..0.8888889 Y]. */
+    public static final VoxelShape FLUID_SOURCE = new VoxelShape(new SubBox[]{
+        new SubBox(0f, 0f, 0f, 1f, 0.8888889f, 1f)
+    }, false);
 
     // Slabs
     /** Bottom slab shape [0..0.5 Y]. */
@@ -105,7 +109,13 @@ public final class VoxelShape {
         this(boxes, boxes.length == 1 && boxes[0].isFullBlock());
     }
 
-    private VoxelShape(SubBox[] boxes, boolean isFull) {
+    /**
+     * Constructs a VoxelShape with explicit full-cube classification.
+     *
+     * @param boxes  Array of constituent sub-voxel bounding boxes
+     * @param isFull True if shape completely occludes a 1x1x1 cube
+     */
+    public VoxelShape(SubBox[] boxes, boolean isFull) {
         this.boxes = Objects.requireNonNull(boxes, "Boxes array cannot be null");
         this.isFull = isFull;
     }

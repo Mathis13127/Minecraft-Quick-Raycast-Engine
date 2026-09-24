@@ -235,6 +235,14 @@ public final class MinecraftVoxelBridge {
             return VoxelShape.EMPTY;
         }
 
+        if (!state.getFluidState().isEmpty()) {
+            net.minecraft.world.level.material.FluidState fluid = state.getFluidState();
+            float fluidHeight = fluid.isSource() ? 0.8888889f : Math.max(0.125f, (float) fluid.getAmount() / 8.0f * 0.8888889f);
+            return new VoxelShape(new com.pixel.qve.state.SubBox[]{
+                new com.pixel.qve.state.SubBox(0f, 0f, 0f, 1f, fluidHeight, 1f)
+            }, false);
+        }
+
         try {
             net.minecraft.world.phys.shapes.VoxelShape mcShape =
                     state.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO);

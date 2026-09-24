@@ -81,6 +81,16 @@ public final class ShapeRegistry {
     }
 
     /**
+     * Fast-path check: returns the constituent SubBox array for a block ID in 1 CPU cycle.
+     *
+     * @param blockId 32-bit block ID
+     * @return Array of SubBoxes representing this block
+     */
+    public SubBox[] getBoxes(int blockId) {
+        return getShape(blockId).getBoxes();
+    }
+
+    /**
      * Automatically registers standard Minecraft shapes by matching block name patterns.
      *
      * @param blockRegistry Source BlockIdRegistry to inspect
