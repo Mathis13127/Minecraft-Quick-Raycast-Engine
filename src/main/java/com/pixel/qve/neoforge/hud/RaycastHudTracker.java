@@ -242,32 +242,46 @@ public final class RaycastHudTracker {
                 long elapsedNs = System.nanoTime() - t0;
 
                 String latencyStr;
-                if (elapsedNs < 1_000_000) {
-                    latencyStr = String.format("%.1f µs", elapsedNs / 1000.0);
+                if (elapsedNs < 1_000) {
+                    latencyStr = String.format("§a%d ns", elapsedNs);
+                } else if (elapsedNs < 1_000_000) {
+                    latencyStr = String.format("§a%.1f µs", elapsedNs / 1000.0);
                 } else {
-                    latencyStr = String.format("%.2f ms", elapsedNs / 1_000_000.0);
+                    latencyStr = String.format("§e%.2f ms", elapsedNs / 1_000_000.0);
                 }
 
                 Component message;
                 if (hit.isHit()) {
-                    String blockName = MinecraftVoxelBridge.getBlockRegistry().getName(hit.getBlockId());
+                    short blockId = hit.getBlockId();
+                    String blockName = MinecraftVoxelBridge.getBlockRegistry().getName(blockId);
                     if (blockName == null || blockName.isEmpty()) {
-                        blockName = "unknown#id=" + hit.getBlockId();
+                        blockName = "unknown";
                     }
-                    message = Component.literal(String.format(
-                            "§6Target: §b%s §8| §f[%d, %d, %d] §8(§e%.1fm§8) §8| §d%s §8| §a%s",
-                            blockName,
-                            hit.getBlockX(), hit.getBlockY(), hit.getBlockZ(),
+                    String props = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().formatProperties(blockId);
+                    String propsSuffix = props.isEmpty() ? "" : " §e" + props;
+
+                    String line1 = String.format(
+                            "§6[QVE] %s §8| §e%.1fm §8| §f[%d, %d, %d] §8(§d%s§8)",
+                            latencyStr,
                             hit.getDistance(),
-                            hit.getFace(),
-                            latencyStr
-                    ));
+                            hit.getBlockX(), hit.getBlockY(), hit.getBlockZ(),
+                            hit.getFace()
+                    );
+                    String line2 = String.format(
+                            "§b%s §7(ID: %d)%s",
+                            blockName,
+                            blockId,
+                            propsSuffix
+                    );
+                    message = Component.literal(line1 + "\n" + line2);
                 } else {
-                    message = Component.literal(String.format(
-                            "§6Target: §7Miss/Air §8| §8(§7>%,.0fm§8) §8| §a%s",
-                            maxDist,
-                            latencyStr
-                    ));
+                    String line1 = String.format(
+                            "§6[QVE] %s §8| §7Miss/Air §8(§7>%,.0fm§8)",
+                            latencyStr,
+                            maxDist
+                    );
+                    String line2 = "§8Clear line of sight (no obstacles)";
+                    message = Component.literal(line1 + "\n" + line2);
                 }
 
                 if (server != null) {

@@ -14,13 +14,13 @@ import static org.junit.jupiter.api.Assertions.*;
 public class PropertyIndexRegistryTest {
 
     @Test
-    @DisplayName("Verify Level 1 (Keys) and Level 2 (Values) registration and retrieval")
+    @DisplayName("Verify Level 1 (Keys) and Level 2 (Values) 16-bit registration and retrieval")
     void testPropertyKeyAndValueRegistration() {
         PropertyIndexRegistry registry = new PropertyIndexRegistry();
 
-        byte facingKey = registry.getOrRegisterKey("facing");
-        byte halfKey = registry.getOrRegisterKey("half");
-        byte waterloggedKey = registry.getOrRegisterKey("waterlogged");
+        short facingKey = registry.getOrRegisterKey("facing");
+        short halfKey = registry.getOrRegisterKey("half");
+        short waterloggedKey = registry.getOrRegisterKey("waterlogged");
 
         assertEquals(0, facingKey);
         assertEquals(1, halfKey);
@@ -32,10 +32,10 @@ public class PropertyIndexRegistryTest {
         assertEquals("waterlogged", registry.getKeyName(waterloggedKey));
 
         // Values for facing
-        byte north = registry.getOrRegisterValue(facingKey, "north");
-        byte south = registry.getOrRegisterValue(facingKey, "south");
-        byte east = registry.getOrRegisterValue(facingKey, "east");
-        byte west = registry.getOrRegisterValue(facingKey, "west");
+        short north = registry.getOrRegisterValue(facingKey, "north");
+        short south = registry.getOrRegisterValue(facingKey, "south");
+        short east = registry.getOrRegisterValue(facingKey, "east");
+        short west = registry.getOrRegisterValue(facingKey, "west");
 
         assertEquals(0, north);
         assertEquals(1, south);
@@ -47,8 +47,8 @@ public class PropertyIndexRegistryTest {
         assertEquals("south", registry.getValueName(facingKey, south));
 
         // Values for waterlogged
-        byte valFalse = registry.getOrRegisterValue(waterloggedKey, "false");
-        byte valTrue = registry.getOrRegisterValue(waterloggedKey, "true");
+        short valFalse = registry.getOrRegisterValue(waterloggedKey, "false");
+        short valTrue = registry.getOrRegisterValue(waterloggedKey, "true");
         assertEquals(0, valFalse);
         assertEquals(1, valTrue);
         assertEquals(2, registry.getValueCount(waterloggedKey));
@@ -70,33 +70,33 @@ public class PropertyIndexRegistryTest {
         buf.put(valBytes);
 
         // First pass: registers and populates L1
-        byte keyId = registry.getOrRegisterKey(buf, 0, keyBytes.length);
-        byte valId = registry.getOrRegisterValue(keyId, buf, keyBytes.length, valBytes.length);
+        short keyId = registry.getOrRegisterKey(buf, 0, keyBytes.length);
+        short valId = registry.getOrRegisterValue(keyId, buf, keyBytes.length, valBytes.length);
 
         assertEquals("facing", registry.getKeyName(keyId));
         assertEquals("north", registry.getValueName(keyId, valId));
 
         // Second pass: L1 hit directly from ByteBuffer
-        byte keyIdHit = registry.getOrRegisterKey(buf, 0, keyBytes.length);
-        byte valIdHit = registry.getOrRegisterValue(keyId, buf, keyBytes.length, valBytes.length);
+        short keyIdHit = registry.getOrRegisterKey(buf, 0, keyBytes.length);
+        short valIdHit = registry.getOrRegisterValue(keyId, buf, keyBytes.length, valBytes.length);
 
         assertEquals(keyId, keyIdHit);
         assertEquals(valId, valIdHit);
     }
 
     @Test
-    @DisplayName("Verify per-block property queries in 1-2 CPU cycles via getPropertyValue")
+    @DisplayName("Verify per-block packed property queries in 1-2 CPU cycles via getPropertyValue")
     void testBlockPropertyQueries() {
         PropertyIndexRegistry registry = new PropertyIndexRegistry();
-        byte facingKey = registry.getOrRegisterKey("facing");
-        byte halfKey = registry.getOrRegisterKey("half");
-        byte shapeKey = registry.getOrRegisterKey("shape");
+        short facingKey = registry.getOrRegisterKey("facing");
+        short halfKey = registry.getOrRegisterKey("half");
+        short shapeKey = registry.getOrRegisterKey("shape");
 
-        byte northVal = registry.getOrRegisterValue(facingKey, "north");
-        byte topVal = registry.getOrRegisterValue(halfKey, "top");
+        short northVal = registry.getOrRegisterValue(facingKey, "north");
+        short topVal = registry.getOrRegisterValue(halfKey, "top");
 
         short blockId = 42;
-        byte[] pairs = new byte[]{facingKey, northVal, halfKey, topVal};
+        short[] pairs = new short[]{facingKey, northVal, halfKey, topVal};
         registry.registerBlockProperties(blockId, pairs);
 
         // Instant queries

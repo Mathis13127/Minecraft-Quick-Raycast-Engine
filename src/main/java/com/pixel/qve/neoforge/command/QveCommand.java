@@ -64,6 +64,9 @@ public final class QveCommand {
                 .then(Commands.literal("purge")
                         .requires(source -> source.hasPermission(2))
                         .executes(QveCommand::executePurge))
+                .then(Commands.literal("warmup")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(QveCommand::executeWarmup))
                 .then(Commands.literal("cache")
                         .then(Commands.literal("stats")
                                 .executes(QveCommand::executeStats))
@@ -290,6 +293,21 @@ public final class QveCommand {
         source.sendSuccess(() -> Component.literal(String.format(
                 "§6[QVE Purge] §aAll voxel grids and internal caches purged in %d ms.", elapsedMs
         )), true);
+        return 1;
+    }
+
+    private static int executeWarmup(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        source.sendSuccess(() -> Component.literal("§6[QVE Warmup] §7Starting BlockState pre-indexing in background..."), false);
+        com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.reset();
+        com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.startAsyncWarmup().thenAccept(stats -> {
+            if (stats != null) {
+                source.sendSuccess(() -> Component.literal(String.format(
+                        "§6[QVE Warmup] §aComplete in §f%.2f ms§a! Pre-indexed §f%,d§a states across §f%,d§a blocks (§e%d§a property keys).",
+                        stats.elapsedMs(), stats.stateCount(), stats.blockCount(), stats.propertyKeyCount()
+                )), true);
+            }
+        });
         return 1;
     }
 

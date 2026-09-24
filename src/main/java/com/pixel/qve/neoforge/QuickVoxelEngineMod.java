@@ -32,9 +32,26 @@ public class QuickVoxelEngineMod {
      * @param modEventBus The NeoForge mod-lifecycle event bus
      */
     public QuickVoxelEngineMod(IEventBus modEventBus) {
-        LOGGER.info("[RaycastEngine] Initializing Ultra-Fast Raycast Engine for Minecraft 1.21.1...");
+        LOGGER.info("[QuickVoxelEngine] Initializing Quick Voxel Engine for Minecraft 1.21.1...");
         NeoForge.EVENT_BUS.register(this);
         NeoForge.EVENT_BUS.register(com.pixel.qve.neoforge.hud.RaycastHudTracker.class);
+
+        // Hook asynchronous warmup on mod loading complete
+        modEventBus.addListener(this::onLoadComplete);
+    }
+
+    private void onLoadComplete(net.neoforged.fml.event.lifecycle.FMLLoadCompleteEvent event) {
+        com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.startAsyncWarmup();
+    }
+
+    /**
+     * Ensures warmup has started when server starts.
+     *
+     * @param event Server starting event
+     */
+    @SubscribeEvent
+    public void onServerStarting(net.neoforged.neoforge.event.server.ServerStartingEvent event) {
+        com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.startAsyncWarmup();
     }
 
     /**

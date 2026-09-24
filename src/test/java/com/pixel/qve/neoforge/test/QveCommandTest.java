@@ -25,6 +25,7 @@ public class QveCommandTest {
         assertNotNull(qve.getChild("inspect"), "Subcommand 'inspect' should exist");
         assertNotNull(qve.getChild("nbt"), "Subcommand 'nbt' should exist");
         assertNotNull(qve.getChild("purge"), "Subcommand 'purge' should exist");
+        assertNotNull(qve.getChild("warmup"), "Subcommand 'warmup' should exist");
         assertNotNull(qve.getChild("cache"), "Subcommand 'cache' should exist");
         assertNotNull(qve.getChild("test"), "Subcommand 'test' should exist");
         assertNotNull(qve.getChild("benchmark"), "Subcommand 'benchmark' should exist");

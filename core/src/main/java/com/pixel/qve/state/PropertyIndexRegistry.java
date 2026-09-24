@@ -4,54 +4,55 @@ import com.pixel.qve.mca.FastNbtReader;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * High-performance, two-level hierarchical property registry and indexer for BlockStates.
+ * Industrial-grade, two-level hierarchical property registry and indexer for BlockStates.
  * <p>
  * Decomposes property names (Level 1: {@code keyId}) and property values (Level 2: {@code valId})
- * into compact 8-bit unsigned identifiers. Maps 16-bit {@code blockId} to compact pairs
- * {@code [keyId, valId]} enabling O(1), zero-allocation property lookups without String parsing.
+ * into 16-bit identifiers (supporting up to 65,535 keys and 65,535 values per key).
+ * Packs properties into cache-aligned 32-bit integers {@code ((keyId << 16) | valId)}
+ * enabling O(1), zero-allocation property lookups without String parsing.
  */
 public final class PropertyIndexRegistry {
 
     /** Sentinel value indicating that a property or value is absent. */
-    public static final byte NO_VALUE = -1;
+    public static final short NO_VALUE = -1;
 
-    private static final int MAX_KEYS = 256;
-    private static final int MAX_VALUES_PER_KEY = 256;
+    public static final int MAX_KEYS = 65536;
+    public static final int MAX_VALUES_PER_KEY = 65536;
+    private static final int INITIAL_KEY_CAPACITY = 256;
     private static final int INITIAL_BLOCK_CAPACITY = 1024;
 
     // Level 1: Property Keys ("facing", "half", "waterlogged", etc.)
-    private final Map<String, Byte> keyNameToId = new ConcurrentHashMap<>();
-    private final String[] idToKeyName = new String[MAX_KEYS];
+    private final Map<String, Short> keyNameToId = new ConcurrentHashMap<>();
+    private volatile String[] idToKeyName = new String[INITIAL_KEY_CAPACITY];
     private volatile int keyCount = 0;
 
     // Level 1 L1 Hash Cache for zero-allocation byte buffer lookups
-    private static final int L1_KEY_SIZE = 512;
+    private static final int L1_KEY_SIZE = 1024;
     private static final int L1_KEY_MASK = L1_KEY_SIZE - 1;
     private final int[] l1KeyHashes = new int[L1_KEY_SIZE];
-    private final byte[] l1KeyIds = new byte[L1_KEY_SIZE];
+    private final short[] l1KeyIds = new short[L1_KEY_SIZE];
     private final long[] l1KeyOccupied = new long[L1_KEY_SIZE / 64];
 
     // Level 2: Property Values per Key ("north", "south", "true", "false", etc.)
     @SuppressWarnings("unchecked")
-    private final Map<String, Byte>[] valNameToId = new Map[MAX_KEYS];
-    private final String[][] idToValName = new String[MAX_KEYS][MAX_VALUES_PER_KEY];
-    private final int[] valCounts = new int[MAX_KEYS];
+    private volatile Map<String, Short>[] valNameToId = new Map[INITIAL_KEY_CAPACITY];
+    private volatile String[][] idToValName = new String[INITIAL_KEY_CAPACITY][];
+    private volatile int[] valCounts = new int[INITIAL_KEY_CAPACITY];
 
-    // Level 2 L1 Hash Cache: (keyId << 24) | valHash
-    private static final int L1_VAL_SIZE = 1024;
+    // Level 2 L1 Hash Cache: (keyId << 16) ^ valHash
+    private static final int L1_VAL_SIZE = 2048;
     private static final int L1_VAL_MASK = L1_VAL_SIZE - 1;
     private final int[] l1ValHashes = new int[L1_VAL_SIZE];
-    private final byte[] l1ValIds = new byte[L1_VAL_SIZE];
+    private final short[] l1ValIds = new short[L1_VAL_SIZE];
     private final long[] l1ValOccupied = new long[L1_VAL_SIZE / 64];
 
-    // Block ID to property pairs [keyId_0, valId_0, keyId_1, valId_1, ...]
-    private volatile byte[][] blockProperties = new byte[INITIAL_BLOCK_CAPACITY][];
+    // Block ID to packed property pairs ((keyId << 16) | valId)
+    private volatile int[][] blockProperties = new int[INITIAL_BLOCK_CAPACITY][];
 
     public PropertyIndexRegistry() {
         Arrays.fill(l1KeyIds, NO_VALUE);
@@ -59,14 +60,14 @@ public final class PropertyIndexRegistry {
     }
 
     /**
-     * Resolves or registers a property key name (e.g. "facing") returning its 8-bit index.
+     * Resolves or registers a property key name (e.g. "facing") returning its 16-bit index.
      *
      * @param keyName Property key name
-     * @return Compact 8-bit key ID (0..255)
+     * @return Compact 16-bit key ID (0..65535)
      */
-    public synchronized byte getOrRegisterKey(String keyName) {
+    public synchronized short getOrRegisterKey(String keyName) {
         Objects.requireNonNull(keyName, "Property keyName cannot be null");
-        Byte existing = keyNameToId.get(keyName);
+        Short existing = keyNameToId.get(keyName);
         if (existing != null) {
             return existing;
         }
@@ -75,10 +76,14 @@ public final class PropertyIndexRegistry {
             throw new IllegalStateException("Maximum property key capacity (" + MAX_KEYS + ") exceeded");
         }
 
-        byte newId = (byte) keyCount++;
-        idToKeyName[newId & 0xFF] = keyName;
+        short newId = (short) keyCount++;
+        int idx = newId & 0xFFFF;
+        ensureKeyCapacity(idx + 1);
+
+        idToKeyName[idx] = keyName;
         keyNameToId.put(keyName, newId);
-        valNameToId[newId & 0xFF] = new ConcurrentHashMap<>();
+        valNameToId[idx] = new ConcurrentHashMap<>();
+        idToValName[idx] = new String[8];
         return newId;
     }
 
@@ -88,9 +93,9 @@ public final class PropertyIndexRegistry {
      * @param buf    Direct or heap ByteBuffer
      * @param offset Byte start offset
      * @param len    Byte length
-     * @return Compact 8-bit key ID
+     * @return Compact 16-bit key ID
      */
-    public byte getOrRegisterKey(ByteBuffer buf, int offset, int len) {
+    public short getOrRegisterKey(ByteBuffer buf, int offset, int len) {
         int hash = FastNbtReader.hashBytes(buf, offset, len);
         int slot = (hash ^ (hash >>> 16)) & L1_KEY_MASK;
         int wordIdx = slot >>> 6;
@@ -101,7 +106,7 @@ public final class PropertyIndexRegistry {
         }
 
         String decoded = FastNbtReader.decodeStringDirect(buf, offset, len);
-        byte id = getOrRegisterKey(decoded);
+        short id = getOrRegisterKey(decoded);
 
         synchronized (this) {
             l1KeyHashes[slot] = hash;
@@ -116,22 +121,23 @@ public final class PropertyIndexRegistry {
      * Retrieves the existing key ID for a property name, or {@link #NO_VALUE} if unmapped.
      *
      * @param keyName Property key name
-     * @return 8-bit key ID or NO_VALUE
+     * @return 16-bit key ID or NO_VALUE
      */
-    public byte getKeyId(String keyName) {
-        Byte id = keyNameToId.get(keyName);
+    public short getKeyId(String keyName) {
+        Short id = keyNameToId.get(keyName);
         return (id != null) ? id : NO_VALUE;
     }
 
     /**
      * Gets the string name of a property key by ID.
      *
-     * @param keyId 8-bit key ID
+     * @param keyId 16-bit key ID
      * @return Property name, or null if unmapped
      */
-    public String getKeyName(byte keyId) {
-        int idx = keyId & 0xFF;
-        return (idx < MAX_KEYS) ? idToKeyName[idx] : null;
+    public String getKeyName(short keyId) {
+        int idx = keyId & 0xFFFF;
+        String[] names = this.idToKeyName;
+        return (idx < names.length) ? names[idx] : null;
     }
 
     /**
@@ -144,21 +150,21 @@ public final class PropertyIndexRegistry {
     }
 
     /**
-     * Resolves or registers a property value for a given key, returning its 8-bit index.
+     * Resolves or registers a property value for a given key, returning its 16-bit index.
      *
-     * @param keyId 8-bit key ID
+     * @param keyId 16-bit key ID
      * @param value Property value string (e.g. "north")
-     * @return Compact 8-bit value ID
+     * @return Compact 16-bit value ID
      */
-    public synchronized byte getOrRegisterValue(byte keyId, String value) {
+    public synchronized short getOrRegisterValue(short keyId, String value) {
         Objects.requireNonNull(value, "Property value cannot be null");
-        int kIdx = keyId & 0xFF;
+        int kIdx = keyId & 0xFFFF;
         if (kIdx >= keyCount || valNameToId[kIdx] == null) {
             throw new IllegalArgumentException("Unregistered property keyId: " + keyId);
         }
 
-        Map<String, Byte> valMap = valNameToId[kIdx];
-        Byte existing = valMap.get(value);
+        Map<String, Short> valMap = valNameToId[kIdx];
+        Short existing = valMap.get(value);
         if (existing != null) {
             return existing;
         }
@@ -168,9 +174,16 @@ public final class PropertyIndexRegistry {
             throw new IllegalStateException("Maximum values (" + MAX_VALUES_PER_KEY + ") exceeded for key " + idToKeyName[kIdx]);
         }
 
-        byte newValId = (byte) count;
+        short newValId = (short) count;
         valCounts[kIdx] = count + 1;
-        idToValName[kIdx][newValId & 0xFF] = value;
+
+        String[] vals = idToValName[kIdx];
+        if (count >= vals.length) {
+            int newCap = Math.max(vals.length * 2, count + 1);
+            vals = Arrays.copyOf(vals, newCap);
+            idToValName[kIdx] = vals;
+        }
+        vals[count] = value;
         valMap.put(value, newValId);
         return newValId;
     }
@@ -178,15 +191,15 @@ public final class PropertyIndexRegistry {
     /**
      * Resolves or registers a property value directly from a ByteBuffer slice with zero allocations on L1 hits.
      *
-     * @param keyId  8-bit key ID
+     * @param keyId  16-bit key ID
      * @param buf    Direct or heap ByteBuffer
      * @param offset Byte start offset
      * @param len    Byte length
-     * @return Compact 8-bit value ID
+     * @return Compact 16-bit value ID
      */
-    public byte getOrRegisterValue(byte keyId, ByteBuffer buf, int offset, int len) {
+    public short getOrRegisterValue(short keyId, ByteBuffer buf, int offset, int len) {
         int valHash = FastNbtReader.hashBytes(buf, offset, len);
-        int compositeHash = ((keyId & 0xFF) << 24) ^ valHash;
+        int compositeHash = ((keyId & 0xFFFF) << 16) ^ valHash;
         int slot = (compositeHash ^ (compositeHash >>> 16)) & L1_VAL_MASK;
         int wordIdx = slot >>> 6;
         long bit = 1L << (slot & 63);
@@ -196,7 +209,7 @@ public final class PropertyIndexRegistry {
         }
 
         String decoded = FastNbtReader.decodeStringDirect(buf, offset, len);
-        byte valId = getOrRegisterValue(keyId, decoded);
+        short valId = getOrRegisterValue(keyId, decoded);
 
         synchronized (this) {
             l1ValHashes[slot] = compositeHash;
@@ -210,31 +223,34 @@ public final class PropertyIndexRegistry {
     /**
      * Retrieves the existing value ID for a given key and value, or {@link #NO_VALUE} if unmapped.
      *
-     * @param keyId 8-bit key ID
+     * @param keyId 16-bit key ID
      * @param value Property value string
-     * @return 8-bit value ID or NO_VALUE
+     * @return 16-bit value ID or NO_VALUE
      */
-    public byte getValueId(byte keyId, String value) {
-        int kIdx = keyId & 0xFF;
+    public short getValueId(short keyId, String value) {
+        int kIdx = keyId & 0xFFFF;
         if (kIdx >= keyCount || valNameToId[kIdx] == null) {
             return NO_VALUE;
         }
-        Byte id = valNameToId[kIdx].get(value);
+        Short id = valNameToId[kIdx].get(value);
         return (id != null) ? id : NO_VALUE;
     }
 
     /**
      * Gets the string value of a property for a given key ID and value ID.
      *
-     * @param keyId 8-bit key ID
-     * @param valId 8-bit value ID
+     * @param keyId 16-bit key ID
+     * @param valId 16-bit value ID
      * @return Value string, or null if unmapped
      */
-    public String getValueName(byte keyId, byte valId) {
-        int kIdx = keyId & 0xFF;
-        int vIdx = valId & 0xFF;
-        if (kIdx < MAX_KEYS && vIdx < MAX_VALUES_PER_KEY) {
-            return idToValName[kIdx][vIdx];
+    public String getValueName(short keyId, short valId) {
+        int kIdx = keyId & 0xFFFF;
+        int vIdx = valId & 0xFFFF;
+        if (kIdx < keyCount && idToValName[kIdx] != null) {
+            String[] vals = idToValName[kIdx];
+            if (vIdx < vals.length) {
+                return vals[vIdx];
+            }
         }
         return null;
     }
@@ -242,60 +258,87 @@ public final class PropertyIndexRegistry {
     /**
      * Gets the total count of registered values for a property key.
      *
-     * @param keyId 8-bit key ID
+     * @param keyId 16-bit key ID
      * @return Number of registered values
      */
-    public int getValueCount(byte keyId) {
-        int kIdx = keyId & 0xFF;
-        return (kIdx < MAX_KEYS) ? valCounts[kIdx] : 0;
+    public int getValueCount(short keyId) {
+        int kIdx = keyId & 0xFFFF;
+        return (kIdx < keyCount) ? valCounts[kIdx] : 0;
     }
 
     /**
-     * Stores the compact property pairs {@code [keyId, valId, keyId, valId, ...]} for a given block ID.
+     * Stores property pairs {@code [keyId_0, valId_0, keyId_1, valId_1, ...]} for a given block ID,
+     * packing each pair into a single 32-bit int {@code ((keyId << 16) | valId)}.
      *
      * @param blockId 16-bit block ID
-     * @param pairs   Compact array of key-value ID pairs
+     * @param pairs   Array of alternating key-value short pairs
      */
-    public synchronized void registerBlockProperties(short blockId, byte[] pairs) {
+    public synchronized void registerBlockProperties(short blockId, short[] pairs) {
         int index = blockId & 0xFFFF;
         ensureBlockCapacity(index + 1);
-        blockProperties[index] = pairs;
+
+        if (pairs == null || pairs.length == 0) {
+            blockProperties[index] = null;
+            return;
+        }
+
+        int count = pairs.length / 2;
+        int[] packed = new int[count];
+        for (int i = 0; i < count; i++) {
+            int k = pairs[i * 2] & 0xFFFF;
+            int v = pairs[i * 2 + 1] & 0xFFFF;
+            packed[i] = (k << 16) | v;
+        }
+        blockProperties[index] = packed;
     }
 
     /**
-     * Retrieves the raw compact property pairs for a given block ID.
+     * Stores already-packed 32-bit property pairs for a given block ID.
+     *
+     * @param blockId     16-bit block ID
+     * @param packedPairs Array of packed ((keyId &lt;&lt; 16) | valId)
+     */
+    public synchronized void registerBlockPropertiesPacked(short blockId, int[] packedPairs) {
+        int index = blockId & 0xFFFF;
+        ensureBlockCapacity(index + 1);
+        blockProperties[index] = packedPairs;
+    }
+
+    /**
+     * Retrieves the packed property array for a given block ID.
      *
      * @param blockId 16-bit block ID
-     * @return Array of [keyId, valId] pairs, or null if none
+     * @return Array of packed ints, or null if none
      */
-    public byte[] getBlockProperties(short blockId) {
+    public int[] getBlockPropertiesPacked(short blockId) {
         int index = blockId & 0xFFFF;
-        byte[][] props = this.blockProperties;
+        int[][] props = this.blockProperties;
         return (index < props.length) ? props[index] : null;
     }
 
     /**
      * Ultra-fast O(1) query returning the property value ID for a given block ID and key ID.
-     * Executes in ~1-2 CPU cycles via linear scan across a small (2-8 bytes) L1-resident array.
+     * Executes in ~1-2 CPU cycles via linear scan across a small (4-16 bytes) L1-resident array.
      *
      * @param blockId 16-bit block ID
-     * @param keyId   8-bit property key ID
-     * @return 8-bit value ID, or {@link #NO_VALUE} (-1) if property is not present on this block
+     * @param keyId   16-bit property key ID
+     * @return 16-bit value ID, or {@link #NO_VALUE} (-1) if property is not present on this block
      */
-    public byte getPropertyValue(short blockId, byte keyId) {
+    public short getPropertyValue(short blockId, short keyId) {
         int index = blockId & 0xFFFF;
-        byte[][] props = this.blockProperties;
+        int[][] props = this.blockProperties;
         if (index >= props.length) {
             return NO_VALUE;
         }
-        byte[] pairs = props[index];
+        int[] pairs = props[index];
         if (pairs == null) {
             return NO_VALUE;
         }
 
-        for (int i = 0; i < pairs.length; i += 2) {
-            if (pairs[i] == keyId) {
-                return pairs[i + 1];
+        int targetKey = keyId & 0xFFFF;
+        for (int p : pairs) {
+            if ((p >>> 16) == targetKey) {
+                return (short) (p & 0xFFFF);
             }
         }
         return NO_VALUE;
@@ -305,10 +348,10 @@ public final class PropertyIndexRegistry {
      * Returns true if the block possesses the specified property.
      *
      * @param blockId 16-bit block ID
-     * @param keyId   8-bit property key ID
+     * @param keyId   16-bit property key ID
      * @return True if present
      */
-    public boolean hasProperty(short blockId, byte keyId) {
+    public boolean hasProperty(short blockId, short keyId) {
         return getPropertyValue(blockId, keyId) != NO_VALUE;
     }
 
@@ -316,11 +359,11 @@ public final class PropertyIndexRegistry {
      * Retrieves the human-readable string value for a given block ID and property key ID.
      *
      * @param blockId 16-bit block ID
-     * @param keyId   8-bit property key ID
+     * @param keyId   16-bit property key ID
      * @return Value string, or null if property absent
      */
-    public String getPropertyValueName(short blockId, byte keyId) {
-        byte valId = getPropertyValue(blockId, keyId);
+    public String getPropertyValueName(short blockId, short keyId) {
+        short valId = getPropertyValue(blockId, keyId);
         if (valId == NO_VALUE) {
             return null;
         }
@@ -334,21 +377,31 @@ public final class PropertyIndexRegistry {
      * @return Formatted string, or empty string if no properties
      */
     public String formatProperties(short blockId) {
-        byte[] pairs = getBlockProperties(blockId);
-        if (pairs == null || pairs.length == 0) {
+        int[] packed = getBlockPropertiesPacked(blockId);
+        if (packed == null || packed.length == 0) {
             return "";
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append("[");
-        for (int i = 0; i < pairs.length; i += 2) {
+        for (int i = 0; i < packed.length; i++) {
             if (i > 0) sb.append(",");
-            byte k = pairs[i];
-            byte v = pairs[i + 1];
+            short k = (short) (packed[i] >>> 16);
+            short v = (short) (packed[i] & 0xFFFF);
             sb.append(getKeyName(k)).append("=").append(getValueName(k, v));
         }
         sb.append("]");
         return sb.toString();
+    }
+
+    private void ensureKeyCapacity(int minCapacity) {
+        if (minCapacity > idToKeyName.length) {
+            int newCap = Math.max(idToKeyName.length * 2, minCapacity);
+            this.idToKeyName = Arrays.copyOf(idToKeyName, newCap);
+            this.valNameToId = Arrays.copyOf(valNameToId, newCap);
+            this.idToValName = Arrays.copyOf(idToValName, newCap);
+            this.valCounts = Arrays.copyOf(valCounts, newCap);
+        }
     }
 
     private void ensureBlockCapacity(int minCapacity) {
@@ -369,9 +422,9 @@ public final class PropertyIndexRegistry {
         Arrays.fill(l1KeyIds, NO_VALUE);
         Arrays.fill(l1KeyOccupied, 0L);
 
-        for (int i = 0; i < MAX_KEYS; i++) {
+        for (int i = 0; i < valNameToId.length; i++) {
             if (valNameToId[i] != null) valNameToId[i].clear();
-            Arrays.fill(idToValName[i], null);
+            if (idToValName[i] != null) Arrays.fill(idToValName[i], null);
             valCounts[i] = 0;
         }
 

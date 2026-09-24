@@ -126,7 +126,7 @@ public final class MinecraftVoxelBridge {
         var propRegistry = BLOCK_REGISTRY.getStateDictionary().getPropertyRegistry();
         var values = state.getValues();
         if (!values.isEmpty()) {
-            byte[] pairs = new byte[values.size() * 2];
+            short[] pairs = new short[values.size() * 2];
             int pIdx = 0;
             for (var entry : values.entrySet()) {
                 String kName = entry.getKey().getName();
@@ -134,8 +134,8 @@ public final class MinecraftVoxelBridge {
                 net.minecraft.world.level.block.state.properties.Property prop = entry.getKey();
                 @SuppressWarnings("unchecked")
                 String vName = prop.getName(entry.getValue());
-                byte kId = propRegistry.getOrRegisterKey(kName);
-                byte vId = propRegistry.getOrRegisterValue(kId, vName);
+                short kId = propRegistry.getOrRegisterKey(kName);
+                short vId = propRegistry.getOrRegisterValue(kId, vName);
                 pairs[pIdx++] = kId;
                 pairs[pIdx++] = vId;
             }

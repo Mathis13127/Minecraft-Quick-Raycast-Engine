@@ -140,21 +140,21 @@ public final class BlockStateDictionary {
     private void parseAndRegisterPropertiesString(short blockId, String propsString) {
         if (propsString.isEmpty()) return;
         String[] parts = propsString.split(",");
-        byte[] pairs = new byte[parts.length * 2];
+        short[] pairs = new short[parts.length * 2];
         int idx = 0;
         for (String part : parts) {
             int eq = part.indexOf('=');
             if (eq > 0) {
                 String k = part.substring(0, eq).trim();
                 String v = part.substring(eq + 1).trim();
-                byte kId = propertyRegistry.getOrRegisterKey(k);
-                byte vId = propertyRegistry.getOrRegisterValue(kId, v);
+                short kId = propertyRegistry.getOrRegisterKey(k);
+                short vId = propertyRegistry.getOrRegisterValue(kId, v);
                 pairs[idx++] = kId;
                 pairs[idx++] = vId;
             }
         }
         if (idx > 0) {
-            byte[] finalPairs = (idx == pairs.length) ? pairs : Arrays.copyOf(pairs, idx);
+            short[] finalPairs = (idx == pairs.length) ? pairs : Arrays.copyOf(pairs, idx);
             propertyRegistry.registerBlockProperties(blockId, finalPairs);
         }
     }
@@ -312,10 +312,10 @@ public final class BlockStateDictionary {
      * Retrieves the property value ID for a given block ID and property key ID.
      *
      * @param blockId 16-bit block ID
-     * @param keyId   8-bit property key ID
-     * @return 8-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
+     * @param keyId   16-bit property key ID
+     * @return 16-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
      */
-    public byte getPropertyValue(short blockId, byte keyId) {
+    public short getPropertyValue(short blockId, short keyId) {
         return propertyRegistry.getPropertyValue(blockId, keyId);
     }
 
@@ -324,10 +324,10 @@ public final class BlockStateDictionary {
      *
      * @param blockId 16-bit block ID
      * @param keyName Property key name
-     * @return 8-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
+     * @return 16-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
      */
-    public byte getPropertyValue(short blockId, String keyName) {
-        byte keyId = propertyRegistry.getKeyId(keyName);
+    public short getPropertyValue(short blockId, String keyName) {
+        short keyId = propertyRegistry.getKeyId(keyName);
         if (keyId == PropertyIndexRegistry.NO_VALUE) {
             return PropertyIndexRegistry.NO_VALUE;
         }
@@ -353,7 +353,7 @@ public final class BlockStateDictionary {
      * @return Value string, or null if absent
      */
     public String getPropertyValueName(short blockId, String keyName) {
-        byte keyId = propertyRegistry.getKeyId(keyName);
+        short keyId = propertyRegistry.getKeyId(keyName);
         if (keyId == PropertyIndexRegistry.NO_VALUE) {
             return null;
         }
