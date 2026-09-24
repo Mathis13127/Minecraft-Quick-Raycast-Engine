@@ -1,32 +1,42 @@
 package com.pixel.raycast.core.mca;
 
 import com.pixel.raycast.core.api.IVoxelGrid;
+import com.pixel.raycast.core.cache.VoxelChunkColumn;
 import com.pixel.raycast.core.voxel.BlockIdRegistry;
+import com.pixel.raycast.core.voxel.Heightmap2D;
 import com.pixel.raycast.core.voxel.VoxelSection;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Universal voxel world provider backed by one or more Minecraft Anvil (.mca) region files.
- * Provides on-demand chunk loading and ultra-fast section lookup for 3D DDA raycasting.
+ * Provides on-demand chunk loading and ultra-fast section and column lookup for 3D DDA raycasting.
  */
 public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
 
     private static final System.Logger LOGGER = System.getLogger(McaVoxelGrid.class.getName());
 
     private final BlockIdRegistry registry;
-    private final Map<Long, VoxelSection> sectionCache = new ConcurrentHashMap<>();
-    private final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new ConcurrentHashMap<>();
+    private final Map<Long, VoxelChunkColumn> columnCache = new ConcurrentHashMap<>();
+    private static final int L1_SIZE = 1024;
+    private static final int L1_MASK = L1_SIZE - 1;
+    private final long[] l1Keys = new long[L1_SIZE];
+    private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
+    private final Object[] chunkLocks = new Object[256];
+
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
     private final com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry;
     private final Path regionDirectory;
     private final short minWorldY;
+    private final int minSectionY;
+    private final int maxSectionY;
     private volatile short highestWorldY = Short.MIN_VALUE;
 
     /**
@@ -72,6 +82,12 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         this.shapeRegistry = (shapeRegistry != null) ? shapeRegistry : new com.pixel.raycast.core.shape.ShapeRegistry();
         this.regionDirectory = regionDirectory;
         this.minWorldY = minWorldY;
+        this.minSectionY = Math.min(-16, minWorldY >> 4);
+        this.maxSectionY = Math.max(32, (minWorldY >> 4) + 48);
+        Arrays.fill(this.l1Keys, Long.MIN_VALUE);
+        for (int i = 0; i < this.chunkLocks.length; i++) {
+            this.chunkLocks[i] = new Object();
+        }
     }
 
     /**
@@ -109,8 +125,55 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     }
 
     @Override
-    public com.pixel.raycast.core.voxel.Heightmap2D getHeightmap(int chunkX, int chunkZ) {
-        return heightmaps.get(chunkKey(chunkX, chunkZ));
+    public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
+        long cKey = chunkKey(chunkX, chunkZ);
+        int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == cKey) {
+            return l1Columns[slot];
+        }
+
+        VoxelChunkColumn col = columnCache.get(cKey);
+        if (col != null) {
+            l1Keys[slot] = cKey;
+            l1Columns[slot] = col;
+            return col;
+        }
+
+        if (loadedChunks.contains(cKey)) {
+            return null; // Chunk is already loaded and empty/non-existent
+        }
+
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        long rKey = regionKey(rx, rz);
+        if (missingRegions.contains(rKey)) {
+            loadedChunks.add(cKey);
+            return null;
+        }
+
+        if (regions.containsKey(rKey) || regionDirectory != null) {
+            try {
+                loadChunk(chunkX, chunkZ);
+                VoxelChunkColumn loadedCol = columnCache.get(cKey);
+                if (loadedCol != null) {
+                    l1Keys[slot] = cKey;
+                    l1Columns[slot] = loadedCol;
+                }
+                return loadedCol;
+            } catch (Exception e) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
+                        chunkX, chunkZ, rx, rz, e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public Heightmap2D getHeightmap(int chunkX, int chunkZ) {
+        VoxelChunkColumn column = getColumn(chunkX, chunkZ);
+        return (column != null) ? column.getHeightmap() : null;
     }
 
     @Override
@@ -161,23 +224,30 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             for (int cx = 0; cx < 32; cx++) {
                 int worldCx = (rx << 5) | cx;
                 int worldCz = (rz << 5) | cz;
-                loadedChunks.add(chunkKey(worldCx, worldCz));
+                long cKey = chunkKey(worldCx, worldCz);
+                loadedChunks.add(cKey);
 
                 if (!reader.hasChunk(cx, cz)) continue;
 
-                int loaded = reader.readChunk(cx, cz, (sectionY, section) -> {
-                    long key = sectionKey(worldCx, sectionY, worldCz);
-                    sectionCache.put(key, section);
-                    if (section != null && !section.isEmpty()) {
-                        long ck = chunkKey(worldCx, worldCz);
-                        com.pixel.raycast.core.voxel.Heightmap2D hm = heightmaps.computeIfAbsent(ck, k -> new com.pixel.raycast.core.voxel.Heightmap2D());
-                        hm.updateFromSection(sectionY, section);
-                        short h = hm.getHighestY();
-                        if (h > highestWorldY) {
-                            highestWorldY = h;
+                VoxelChunkColumn column = new VoxelChunkColumn(worldCx, worldCz, minSectionY, maxSectionY);
+                int loaded;
+                synchronized (reader) {
+                    loaded = reader.readChunk(cx, cz, (sectionY, section) -> {
+                        column.setSection(sectionY, section);
+                        if (section != null && !section.isEmpty()) {
+                            short h = column.getHeightmap().getHighestY();
+                            if (h > highestWorldY) {
+                                highestWorldY = h;
+                            }
                         }
-                    }
-                });
+                    });
+                }
+                if (loaded > 0) {
+                    columnCache.put(cKey, column);
+                    int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+                    l1Keys[slot] = cKey;
+                    l1Columns[slot] = column;
+                }
                 totalLoaded += loaded;
             }
         }
@@ -194,7 +264,11 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      */
     public int loadChunk(int chunkX, int chunkZ) throws IOException {
         long cKey = chunkKey(chunkX, chunkZ);
-        if (!loadedChunks.add(cKey)) {
+        VoxelChunkColumn existing = columnCache.get(cKey);
+        if (existing != null) {
+            return 0;
+        }
+        if (loadedChunks.contains(cKey)) {
             return 0;
         }
 
@@ -202,88 +276,71 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
+            loadedChunks.add(cKey);
             return 0;
         }
 
-        McaRegionReader reader = regions.computeIfAbsent(rKey, k -> {
-            if (regionDirectory != null) {
-                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-                if (java.nio.file.Files.exists(mcaFile)) {
-                    try {
-                        return new McaRegionReader(mcaFile, registry, shapeRegistry);
-                    } catch (IOException e) {
-                        LOGGER.log(System.Logger.Level.WARNING,
-                                "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
-                        missingRegions.add(k);
-                        return null;
-                    }
-                } else {
-                    missingRegions.add(k);
-                }
+        int lockIndex = (int) ((cKey ^ (cKey >>> 8) ^ (cKey >>> 16)) & 0xFF);
+        synchronized (chunkLocks[lockIndex]) {
+            if (columnCache.containsKey(cKey) || loadedChunks.contains(cKey)) {
+                return 0;
             }
-            return null;
-        });
 
-        if (reader == null) {
-            return 0;
-        }
+            McaRegionReader reader = regions.computeIfAbsent(rKey, k -> {
+                if (regionDirectory != null) {
+                    Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+                    if (java.nio.file.Files.exists(mcaFile)) {
+                        try {
+                            return new McaRegionReader(mcaFile, registry, shapeRegistry);
+                        } catch (IOException e) {
+                            LOGGER.log(System.Logger.Level.WARNING,
+                                    "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
+                            missingRegions.add(k);
+                            return null;
+                        }
+                    } else {
+                        missingRegions.add(k);
+                    }
+                }
+                return null;
+            });
 
-        int localCx = chunkX & 31;
-        int localCz = chunkZ & 31;
-        synchronized (reader) {
-            return reader.readChunk(localCx, localCz, (sectionY, section) -> {
-                long key = sectionKey(chunkX, sectionY, chunkZ);
-                sectionCache.put(key, section);
-                if (section != null && !section.isEmpty()) {
-                    long ck = chunkKey(chunkX, chunkZ);
-                    com.pixel.raycast.core.voxel.Heightmap2D hm = heightmaps.computeIfAbsent(ck, k -> new com.pixel.raycast.core.voxel.Heightmap2D());
-                    synchronized (hm) {
-                        hm.updateFromSection(sectionY, section);
-                        short h = hm.getHighestY();
+            if (reader == null) {
+                loadedChunks.add(cKey);
+                return 0;
+            }
+
+            int localCx = chunkX & 31;
+            int localCz = chunkZ & 31;
+            VoxelChunkColumn column = new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY);
+            int parsed;
+            synchronized (reader) {
+                parsed = reader.readChunk(localCx, localCz, (sectionY, section) -> {
+                    column.setSection(sectionY, section);
+                    if (section != null && !section.isEmpty()) {
+                        short h = column.getHeightmap().getHighestY();
                         if (h > highestWorldY) {
                             highestWorldY = h;
                         }
                     }
-                }
-            });
+                });
+            }
+
+            if (parsed > 0) {
+                columnCache.put(cKey, column);
+                int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+                l1Keys[slot] = cKey;
+                l1Columns[slot] = column;
+            }
+            loadedChunks.add(cKey);
+            return parsed;
         }
     }
 
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
-        long key = sectionKey(sectionX, sectionY, sectionZ);
-        VoxelSection cached = sectionCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
-
-        long cKey = chunkKey(sectionX, sectionZ);
-        if (loadedChunks.contains(cKey)) {
-            return null; // Chunk is already parsed into memory; this section is empty air
-        }
-
-        int rx = sectionX >> 5;
-        int rz = sectionZ >> 5;
-        long rKey = regionKey(rx, rz);
-        if (missingRegions.contains(rKey)) {
-            loadedChunks.add(cKey);
-            return null; // Entire region file does not exist on disk
-        }
-
-        // Lazy-load chunk if region is registered or regionDirectory is configured
-        if (regions.containsKey(rKey) || regionDirectory != null) {
-            try {
-                loadChunk(sectionX, sectionZ);
-                return sectionCache.get(key);
-            } catch (Exception e) {
-                LOGGER.log(System.Logger.Level.WARNING,
-                        "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
-                        sectionX, sectionZ, rx, rz, e.getMessage());
-                return null;
-            }
-        }
-
-        return null;
+        VoxelChunkColumn column = getColumn(sectionX, sectionZ);
+        return (column != null) ? column.getSection(sectionY) : null;
     }
 
     @Override
@@ -297,15 +354,22 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      * @return Cached section count
      */
     public int getCachedSectionCount() {
-        return sectionCache.size();
+        int count = 0;
+        for (VoxelChunkColumn column : columnCache.values()) {
+            if (column != null) {
+                count += column.getCachedSectionCount();
+            }
+        }
+        return count;
     }
 
     /**
      * Clears all cached voxel sections from memory.
      */
     public void clearCache() {
-        sectionCache.clear();
-        heightmaps.clear();
+        columnCache.clear();
+        Arrays.fill(l1Keys, Long.MIN_VALUE);
+        Arrays.fill(l1Columns, null);
         loadedChunks.clear();
         missingRegions.clear();
     }

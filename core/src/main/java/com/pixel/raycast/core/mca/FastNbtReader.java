@@ -86,11 +86,29 @@ public final class FastNbtReader {
         "minecraft:ice"
     };
 
-    private static final byte[][] COMMON_BYTES;
+    private static final int COMMON_TABLE_SIZE = 64;
+    private static final int COMMON_TABLE_MASK = COMMON_TABLE_SIZE - 1;
+    private static final int[] COMMON_HASHES = new int[COMMON_TABLE_SIZE];
+    private static final byte[][] COMMON_HASH_BYTES = new byte[COMMON_TABLE_SIZE][];
+    private static final String[] COMMON_HASH_STRINGS = new String[COMMON_TABLE_SIZE];
+
     static {
-        COMMON_BYTES = new byte[COMMON_PALETTE.length][];
         for (int i = 0; i < COMMON_PALETTE.length; i++) {
-            COMMON_BYTES[i] = COMMON_PALETTE[i].getBytes(StandardCharsets.UTF_8);
+            byte[] bytes = COMMON_PALETTE[i].getBytes(StandardCharsets.UTF_8);
+
+            int h = 0x811c9dc5;
+            for (byte b : bytes) {
+                h ^= (b & 0xFF);
+                h *= 0x01000193;
+            }
+
+            int slot = h & COMMON_TABLE_MASK;
+            while (COMMON_HASH_STRINGS[slot] != null) {
+                slot = (slot + 1) & COMMON_TABLE_MASK;
+            }
+            COMMON_HASHES[slot] = h;
+            COMMON_HASH_BYTES[slot] = bytes;
+            COMMON_HASH_STRINGS[slot] = COMMON_PALETTE[i];
         }
     }
 
@@ -129,37 +147,58 @@ public final class FastNbtReader {
             return "";
         }
         int pos = buf.position();
+        String result = decodeStringDirect(buf, pos, len);
+        buf.position(pos + len);
+        return result;
+    }
 
-        // 1. Instant check for common vanilla palette names
-        for (int i = 0; i < COMMON_BYTES.length; i++) {
-            byte[] common = COMMON_BYTES[i];
-            if (common.length == len && matches(buf, pos, len, common)) {
-                buf.position(pos + len);
-                return COMMON_PALETTE[i];
-            }
+    /**
+     * Decodes or resolves a UTF-8 string from an arbitrary ByteBuffer slice with zero allocations on cache hits.
+     *
+     * @param buf    Byte buffer
+     * @param offset Starting offset of string payload
+     * @param length Length of string payload
+     * @return Decoded String
+     */
+    public static String decodeStringDirect(ByteBuffer buf, int offset, int length) {
+        if (length == 0) {
+            return "";
         }
 
-        // 2. Direct byte-hash L1 cache (zero allocation)
-        int hash = hashBytes(buf, pos, len);
+        int hash = hashBytes(buf, offset, length);
+
+        // 1. Instant O(1) hash check for common vanilla palette names
+        int commonSlot = hash & COMMON_TABLE_MASK;
+        while (COMMON_HASH_STRINGS[commonSlot] != null) {
+            if (COMMON_HASHES[commonSlot] == hash && matches(buf, offset, length, COMMON_HASH_BYTES[commonSlot])) {
+                return COMMON_HASH_STRINGS[commonSlot];
+            }
+            commonSlot = (commonSlot + 1) & COMMON_TABLE_MASK;
+        }
+
+        // 2. Direct byte-hash L1 cache for modded / arbitrary block names
         int slot = hash & STRING_CACHE_MASK;
         String cached = STRING_CACHE[slot];
-        if (cached != null && HASH_CACHE[slot] == hash && cached.length() == len) {
+        if (cached != null && HASH_CACHE[slot] == hash && cached.length() == length) {
             boolean match = true;
-            for (int i = 0; i < len; i++) {
-                if ((char) (buf.get(pos + i) & 0xFF) != cached.charAt(i)) {
+            for (int i = 0; i < length; i++) {
+                if ((char) (buf.get(offset + i) & 0xFF) != cached.charAt(i)) {
                     match = false;
                     break;
                 }
             }
             if (match) {
-                buf.position(pos + len);
                 return cached;
             }
         }
 
         // 3. Fallback: decode string and cache it in L1 slot
-        byte[] bytes = new byte[len];
+        byte[] bytes = new byte[length];
+        int oldPos = buf.position();
+        buf.position(offset);
         buf.get(bytes);
+        buf.position(oldPos);
+
         String decoded = new String(bytes, StandardCharsets.UTF_8).intern();
         HASH_CACHE[slot] = hash;
         STRING_CACHE[slot] = decoded;

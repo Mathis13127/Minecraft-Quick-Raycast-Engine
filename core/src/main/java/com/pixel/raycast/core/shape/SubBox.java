@@ -154,6 +154,24 @@ public final class SubBox {
         return true;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        SubBox subBox = (SubBox) o;
+        return Float.compare(subBox.minX, minX) == 0 &&
+                Float.compare(subBox.minY, minY) == 0 &&
+                Float.compare(subBox.minZ, minZ) == 0 &&
+                Float.compare(subBox.maxX, maxX) == 0 &&
+                Float.compare(subBox.maxY, maxY) == 0 &&
+                Float.compare(subBox.maxZ, maxZ) == 0;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
     /**
      * Mutable result container for sub-box intersection queries.
      */

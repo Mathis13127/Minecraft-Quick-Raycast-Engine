@@ -378,12 +378,11 @@ public final class McaRegionReader implements Closeable {
                         buf.get(); // elemType (10)
                         int pCount = buf.getInt();
                         if (pCount == 1) {
-                            String name = parsePaletteEntry(buf);
-                            paletteIds = new short[] { registry.getOrRegister(name) };
+                            paletteIds = new short[] { parsePaletteEntry(buf) };
                         } else {
                             paletteIds = new short[pCount];
                             for (int pi = 0; pi < pCount; pi++) {
-                                paletteIds[pi] = registry.getOrRegister(parsePaletteEntry(buf));
+                                paletteIds[pi] = parsePaletteEntry(buf);
                             }
                         }
                     } else if (FastNbtReader.matches(buf, bsNamePos, bsNameLen, DATA_NAME) && bsType == FastNbtReader.TAG_LONG_ARRAY) {
@@ -414,8 +413,8 @@ public final class McaRegionReader implements Closeable {
         return 0;
     }
 
-    private String parsePaletteEntry(ByteBuffer buf) {
-        String name = "";
+    private short parsePaletteEntry(ByteBuffer buf) {
+        short blockId = BlockIdRegistry.AIR_ID;
         while (true) {
             byte itemType = buf.get();
             if (itemType == FastNbtReader.TAG_END) break;
@@ -425,12 +424,15 @@ public final class McaRegionReader implements Closeable {
             buf.position(namePos + nameLen);
 
             if (FastNbtReader.matches(buf, namePos, nameLen, NAME_NAME) && itemType == FastNbtReader.TAG_STRING) {
-                name = FastNbtReader.readString(buf);
+                int strLen = buf.getShort() & 0xFFFF;
+                int strPos = buf.position();
+                buf.position(strPos + strLen);
+                blockId = registry.getOrRegisterFromBytes(buf, strPos, strLen);
             } else {
                 FastNbtReader.skipTagPayload(buf, itemType);
             }
         }
-        return name;
+        return blockId;
     }
 
     @Override

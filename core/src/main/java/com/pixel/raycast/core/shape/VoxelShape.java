@@ -185,4 +185,17 @@ public final class VoxelShape {
         }
         return false;
     }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        VoxelShape that = (VoxelShape) o;
+        return isFull == that.isFull && Arrays.equals(boxes, that.boxes);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * Boolean.hashCode(isFull) + Arrays.hashCode(boxes);
+    }
 }
