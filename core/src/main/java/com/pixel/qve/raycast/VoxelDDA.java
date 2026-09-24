@@ -165,6 +165,25 @@ public final class VoxelDDA {
             }
         }
 
+        int startRegionX = startChunkX >> 5;
+        int startRegionZ = startChunkZ >> 5;
+        int endRegionX = endChunkX >> 5;
+        int endRegionZ = endChunkZ >> 5;
+
+        if (startRegionX == endRegionX && startRegionZ == endRegionZ) {
+            short regMaxY = grid.getRegionMaxY(startRegionX, startRegionZ);
+            if (grid.isRegionEmpty(startRegionX, startRegionZ) || (regMaxY != com.pixel.qve.world.Heightmap2D.VOID_Y && minRayY >= (regMaxY + 1.0))) {
+                return false; // Guaranteed pure sky traversal across the entire region: zero DDA steps
+            }
+        }
+
+        // Instant O(1) out-of-bounds culling if start point is already outside world heading away
+        int x0 = (int) Math.floor(startX);
+        int z0 = (int) Math.floor(startZ);
+        if (grid.isOutOfBounds(x0, z0, stepX, stepZ)) {
+            return false; // Zero DDA steps: ray is outside all known regions and pointing away into void
+        }
+
         // Current voxel integer coordinate
         int x = (int) Math.floor(startX);
         int y = (int) Math.floor(startY);
@@ -180,13 +199,6 @@ public final class VoxelDDA {
         VoxelSection currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
         if (currentSection == null) {
             currentSection = grid.getSection(currentSx, currentSy, currentSz);
-        }
-
-        // Instant O(1) out-of-bounds culling if start point is already outside world heading away
-        int x0 = (int) Math.floor(startX);
-        int z0 = (int) Math.floor(startZ);
-        if (grid.isOutOfBounds(x0, z0, stepX, stepZ)) {
-            return false; // Zero DDA steps: ray is outside all known regions and pointing away into void
         }
 
         // Interval between voxel boundaries along each axis
@@ -216,14 +228,6 @@ public final class VoxelDDA {
         while (t <= maxDist) {
             // Macro-skip: jump across empty space in 1 step
             if (currentSection == null || currentSection.isEmpty()) {
-                // Keep chunk heightmap synchronized with current horizontal position
-                if (currentSx != currentChunkX || currentSz != currentChunkZ) {
-                    currentChunkX = currentSx;
-                    currentChunkZ = currentSz;
-                    currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
-                    currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
-                }
-
                 // 0. Out-of-bounds termination: ray left all known geometry heading into void
                 if (grid.isOutOfBounds(x, z, stepX, stepZ)) {
                     break;
@@ -235,18 +239,27 @@ public final class VoxelDDA {
                     break;
                 }
 
-                // 1. Region-Level Macro-Skip: bypass entire 512x512 block region if absent or empty
+                // 1. Region-Level Macro-Skip: bypass entire 512x512 block region if absent, empty, or ray is above region terrain
                 int currentRx = currentSx >> 5;
                 int currentRz = currentSz >> 5;
-                if (grid.isRegionEmpty(currentRx, currentRz)) {
-                    int regMinX = currentRx << 9;
-                    int regMinZ = currentRz << 9;
+                int regMinX = currentRx << 9;
+                int regMinZ = currentRz << 9;
 
-                    double exitRegTx = (stepX > 0) ? ((regMinX + 512.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - regMinX) * tDeltaX) : Double.MAX_VALUE);
-                    double exitRegTz = (stepZ > 0) ? ((regMinZ + 512.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - regMinZ) * tDeltaZ) : Double.MAX_VALUE);
-                    double exitRegT = Math.min(exitRegTx, exitRegTz);
+                double exitRegTx = (stepX > 0) ? ((regMinX + 512.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - regMinX) * tDeltaX) : Double.MAX_VALUE);
+                double exitRegTz = (stepZ > 0) ? ((regMinZ + 512.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - regMinZ) * tDeltaZ) : Double.MAX_VALUE);
+                double exitRegT = Math.min(exitRegTx, exitRegTz);
 
-                    if (exitRegT > t) {
+                if (exitRegT > t) {
+                    double tEnd = Math.min(exitRegT, maxDist);
+                    double yCurrent = startY + t * dirY;
+                    double yEnd = startY + tEnd * dirY;
+                    double minYInRegion = Math.min(yCurrent, yEnd);
+
+                    boolean regionEmpty = grid.isRegionEmpty(currentRx, currentRz);
+                    short regionMaxY = grid.getRegionMaxY(currentRx, currentRz);
+                    boolean aboveRegion = (regionMaxY != Heightmap2D.VOID_Y && minYInRegion >= (regionMaxY + 1.0));
+
+                    if (regionEmpty || aboveRegion) {
                         if (exitRegT > maxDist) {
                             break;
                         }
@@ -280,12 +293,9 @@ public final class VoxelDDA {
                         currentSz = z >> 4;
                         currentChunkX = currentSx;
                         currentChunkZ = currentSz;
-                        currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
-                        currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
-                        currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
-                        if (currentSection == null) {
-                            currentSection = grid.getSection(currentSx, currentSy, currentSz);
-                        }
+                        currentColumn = null;
+                        currentHm = null;
+                        currentSection = grid.getSection(currentSx, currentSy, currentSz);
 
                         if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
                             if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tMaxX, tMaxY, tMaxZ, lastFace, currentSection, grid, subHit, result)) {
@@ -294,6 +304,14 @@ public final class VoxelDDA {
                         }
                         continue;
                     }
+                }
+
+                // Keep chunk heightmap synchronized with current horizontal position only if region was not skipped
+                if (currentSx != currentChunkX || currentSz != currentChunkZ || (currentColumn == null && currentHm == null)) {
+                    currentChunkX = currentSx;
+                    currentChunkZ = currentSz;
+                    currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
+                    currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
                 }
 
                 // 2. Chunk-Level Macro-Skip: bypass entire 16x16 chunk column horizontally if above terrain or empty column

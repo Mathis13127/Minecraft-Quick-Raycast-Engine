@@ -36,6 +36,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final Object[] chunkLocks = new Object[256];
 
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
+    private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
     private final com.pixel.qve.state.ShapeRegistry shapeRegistry;
@@ -270,6 +271,24 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     }
 
     @Override
+    public com.pixel.qve.world.RegionHeightmap2D getRegionHeightmap(int regionX, int regionZ) {
+        return regionHeightmaps.get(regionKey(regionX, regionZ));
+    }
+
+    @Override
+    public short getRegionMaxY(int regionX, int regionZ) {
+        long rKey = regionKey(regionX, regionZ);
+        com.pixel.qve.world.RegionHeightmap2D rHm = regionHeightmaps.get(rKey);
+        if (rHm != null && rHm.getRegionMaxY() != com.pixel.qve.world.Heightmap2D.VOID_Y) {
+            return rHm.getRegionMaxY();
+        }
+        if (isRegionEmpty(regionX, regionZ)) {
+            return com.pixel.qve.world.Heightmap2D.VOID_Y;
+        }
+        return Short.MAX_VALUE;
+    }
+
+    @Override
     public boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
         if (minBlockX > maxBlockX) {
             return false; // No bounded regions registered
@@ -326,6 +345,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int totalLoaded = 0;
         int rx = reader.getRegionX();
         int rz = reader.getRegionZ();
+        long rKey = regionKey(rx, rz);
 
         for (int cz = 0; cz < 32; cz++) {
             for (int cx = 0; cx < 32; cx++) {
@@ -354,6 +374,9 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                     int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
                     l1Keys[slot] = cKey;
                     l1Columns[slot] = column;
+                    short colH = column.getHeightmap().getHighestY();
+                    regionHeightmaps.computeIfAbsent(rKey, k -> new com.pixel.qve.world.RegionHeightmap2D())
+                            .updateMax(cx, cz, colH);
                 }
                 totalLoaded += loaded;
             }
@@ -424,6 +447,9 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 l1Keys[slot] = cKey;
                 l1Columns[slot] = column;
                 loadedChunks.add(cKey);
+                short colH = column.getHeightmap().getHighestY();
+                regionHeightmaps.computeIfAbsent(rKey, k -> new com.pixel.qve.world.RegionHeightmap2D())
+                        .updateMax(localCx, localCz, colH);
             }
             return parsed;
         }
@@ -464,6 +490,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         Arrays.fill(l1Columns, null);
         loadedChunks.clear();
         missingRegions.clear();
+        regionHeightmaps.clear();
     }
 
     /**

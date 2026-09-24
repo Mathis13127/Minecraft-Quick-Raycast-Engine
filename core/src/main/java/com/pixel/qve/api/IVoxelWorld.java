@@ -129,6 +129,34 @@ public interface IVoxelWorld {
     }
 
     /**
+     * Retrieves the optional 2D heightmap for the specified 512x512 region, or null if uncomputed.
+     *
+     * @param regionX Region X coordinate (world block X &gt;&gt; 9)
+     * @param regionZ Region Z coordinate (world block Z &gt;&gt; 9)
+     * @return RegionHeightmap2D instance, or null if uncomputed
+     */
+    default com.pixel.qve.world.RegionHeightmap2D getRegionHeightmap(int regionX, int regionZ) {
+        return null;
+    }
+
+    /**
+     * Retrieves the maximum solid block Y altitude in the specified 512x512 region.
+     * Returns {@link com.pixel.qve.world.Heightmap2D#VOID_Y} if the region is completely empty.
+     * Returns {@link Short#MAX_VALUE} if unconstrained or unknown.
+     *
+     * @param regionX Region X coordinate (world block X &gt;&gt; 9)
+     * @param regionZ Region Z coordinate (world block Z &gt;&gt; 9)
+     * @return Maximum solid Y in region
+     */
+    default short getRegionMaxY(int regionX, int regionZ) {
+        if (isRegionEmpty(regionX, regionZ)) {
+            return com.pixel.qve.world.Heightmap2D.VOID_Y;
+        }
+        com.pixel.qve.world.RegionHeightmap2D rHm = getRegionHeightmap(regionX, regionZ);
+        return (rHm != null) ? rHm.getRegionMaxY() : Short.MAX_VALUE;
+    }
+
+    /**
      * Checks if the given world block coordinate is outside all known populated/disk regions
      * and the ray direction is pointing outward away from any known geometry.
      *

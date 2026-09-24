@@ -34,6 +34,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
     private final int maxSectionY;
 
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
+    private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
     private static final int L1_SIZE = 1024;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
@@ -181,6 +182,11 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
         if (colHighest > highestWorldY) {
             highestWorldY = colHighest;
         }
+
+        int rx = sectionX >> 5;
+        int rz = sectionZ >> 5;
+        regionHeightmaps.computeIfAbsent(regionKey(rx, rz), k -> new com.pixel.qve.world.RegionHeightmap2D())
+                .updateMax(sectionX & 31, sectionZ & 31, colHighest);
     }
 
     /**
@@ -202,6 +208,28 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
         if (solid && worldY > highestWorldY) {
             highestWorldY = (short) worldY;
         }
+
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        regionHeightmaps.computeIfAbsent(regionKey(rx, rz), k -> new com.pixel.qve.world.RegionHeightmap2D())
+                .updateMax(chunkX & 31, chunkZ & 31, column.getHeightmap().getHighestY());
+    }
+
+    /**
+     * Updates the region heightmap and highest world Y for a chunk column.
+     *
+     * @param chunkX        Chunk X coordinate
+     * @param chunkZ        Chunk Z coordinate
+     * @param chunkHighestY Highest Y coordinate in this chunk column
+     */
+    public void updateChunkHeightmap(int chunkX, int chunkZ, short chunkHighestY) {
+        if (chunkHighestY > highestWorldY) {
+            highestWorldY = chunkHighestY;
+        }
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        regionHeightmaps.computeIfAbsent(regionKey(rx, rz), k -> new com.pixel.qve.world.RegionHeightmap2D())
+                .updateMax(chunkX & 31, chunkZ & 31, chunkHighestY);
     }
 
     /**
@@ -306,12 +334,60 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
         this.diskFallback = diskFallback;
     }
 
+    /**
+     * Computes a 64-bit spatial hash key for 2D region coordinates.
+     *
+     * @param rx Region X coordinate
+     * @param rz Region Z coordinate
+     * @return 64-bit packed region key
+     */
+    public static long regionKey(int rx, int rz) {
+        return (((long) rx & 0xFFFFFFFFL)) | (((long) rz & 0xFFFFFFFFL) << 32);
+    }
+
     @Override
     public boolean isRegionEmpty(int regionX, int regionZ) {
+        long rk = regionKey(regionX, regionZ);
+        com.pixel.qve.world.RegionHeightmap2D rHm = regionHeightmaps.get(rk);
+        if (rHm != null && rHm.getRegionMaxY() != com.pixel.qve.world.Heightmap2D.VOID_Y) {
+            return false;
+        }
         if (diskFallback != null) {
             return diskFallback.isRegionEmpty(regionX, regionZ);
         }
-        return false;
+        return (rHm == null);
+    }
+
+    @Override
+    public com.pixel.qve.world.RegionHeightmap2D getRegionHeightmap(int regionX, int regionZ) {
+        long rk = regionKey(regionX, regionZ);
+        com.pixel.qve.world.RegionHeightmap2D rHm = regionHeightmaps.get(rk);
+        if (rHm != null && rHm.getRegionMaxY() != com.pixel.qve.world.Heightmap2D.VOID_Y) {
+            return rHm;
+        }
+        if (diskFallback != null) {
+            return diskFallback.getRegionHeightmap(regionX, regionZ);
+        }
+        return rHm;
+    }
+
+    @Override
+    public short getRegionMaxY(int regionX, int regionZ) {
+        long rk = regionKey(regionX, regionZ);
+        com.pixel.qve.world.RegionHeightmap2D rHm = regionHeightmaps.get(rk);
+        short cacheMax = (rHm != null) ? rHm.getRegionMaxY() : com.pixel.qve.world.Heightmap2D.VOID_Y;
+        if (diskFallback != null) {
+            short diskMax = diskFallback.getRegionMaxY(regionX, regionZ);
+            if (diskMax > cacheMax && diskMax != Short.MAX_VALUE) {
+                cacheMax = diskMax;
+            } else if (cacheMax == com.pixel.qve.world.Heightmap2D.VOID_Y) {
+                cacheMax = diskMax;
+            }
+        }
+        if (cacheMax != com.pixel.qve.world.Heightmap2D.VOID_Y) {
+            return cacheMax;
+        }
+        return isRegionEmpty(regionX, regionZ) ? com.pixel.qve.world.Heightmap2D.VOID_Y : Short.MAX_VALUE;
     }
 
     @Override

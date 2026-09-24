@@ -191,6 +191,20 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
                 }
             }
         }
+        short highest = colHm.getHighestY();
+        if (highest != Heightmap2D.VOID_Y) {
+            cache.updateChunkHeightmap(chunkX, chunkZ, highest);
+        }
+    }
+
+    @Override
+    public com.pixel.qve.world.RegionHeightmap2D getRegionHeightmap(int regionX, int regionZ) {
+        return cache.getRegionHeightmap(regionX, regionZ);
+    }
+
+    @Override
+    public short getRegionMaxY(int regionX, int regionZ) {
+        return cache.getRegionMaxY(regionX, regionZ);
     }
 
     @Override
@@ -228,7 +242,17 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         if (isNearLiveChunks(worldBlockX, worldBlockZ)) {
             return false;
         }
-        return cache.isOutOfBounds(worldBlockX, worldBlockZ, stepX, stepZ);
+        if (cache.hasWorldBounds()) {
+            return cache.isOutOfBounds(worldBlockX, worldBlockZ, stepX, stepZ);
+        }
+        if (level instanceof ServerLevel) {
+            PlayerBounds b = getOrComputePlayerBounds();
+            if (stepX > 0 && worldBlockX > b.maxX) return true;
+            if (stepX < 0 && worldBlockX < b.minX) return true;
+            if (stepZ > 0 && worldBlockZ > b.maxZ) return true;
+            if (stepZ < 0 && worldBlockZ < b.minZ) return true;
+        }
+        return false;
     }
 
     private static final class PlayerBounds {
@@ -312,42 +336,62 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
     @Override
     public int getWorldMinX() {
-        int diskMin = cache.getWorldMinX();
-        if (level instanceof ServerLevel) {
-            PlayerBounds b = getOrComputePlayerBounds();
-            return Math.min(diskMin, b.minX);
+        if (cache.hasWorldBounds()) {
+            int diskMin = cache.getWorldMinX();
+            if (level instanceof ServerLevel) {
+                PlayerBounds b = getOrComputePlayerBounds();
+                return Math.min(diskMin, b.minX);
+            }
+            return diskMin;
+        } else if (level instanceof ServerLevel) {
+            return getOrComputePlayerBounds().minX;
         }
-        return diskMin;
+        return Integer.MIN_VALUE;
     }
 
     @Override
     public int getWorldMaxX() {
-        int diskMax = cache.getWorldMaxX();
-        if (level instanceof ServerLevel) {
-            PlayerBounds b = getOrComputePlayerBounds();
-            return Math.max(diskMax, b.maxX);
+        if (cache.hasWorldBounds()) {
+            int diskMax = cache.getWorldMaxX();
+            if (level instanceof ServerLevel) {
+                PlayerBounds b = getOrComputePlayerBounds();
+                return Math.max(diskMax, b.maxX);
+            }
+            return diskMax;
+        } else if (level instanceof ServerLevel) {
+            return getOrComputePlayerBounds().maxX;
         }
-        return diskMax;
+        return Integer.MAX_VALUE;
     }
 
     @Override
     public int getWorldMinZ() {
-        int diskMin = cache.getWorldMinZ();
-        if (level instanceof ServerLevel) {
-            PlayerBounds b = getOrComputePlayerBounds();
-            return Math.min(diskMin, b.minZ);
+        if (cache.hasWorldBounds()) {
+            int diskMin = cache.getWorldMinZ();
+            if (level instanceof ServerLevel) {
+                PlayerBounds b = getOrComputePlayerBounds();
+                return Math.min(diskMin, b.minZ);
+            }
+            return diskMin;
+        } else if (level instanceof ServerLevel) {
+            return getOrComputePlayerBounds().minZ;
         }
-        return diskMin;
+        return Integer.MIN_VALUE;
     }
 
     @Override
     public int getWorldMaxZ() {
-        int diskMax = cache.getWorldMaxZ();
-        if (level instanceof ServerLevel) {
-            PlayerBounds b = getOrComputePlayerBounds();
-            return Math.max(diskMax, b.maxZ);
+        if (cache.hasWorldBounds()) {
+            int diskMax = cache.getWorldMaxZ();
+            if (level instanceof ServerLevel) {
+                PlayerBounds b = getOrComputePlayerBounds();
+                return Math.max(diskMax, b.maxZ);
+            }
+            return diskMax;
+        } else if (level instanceof ServerLevel) {
+            return getOrComputePlayerBounds().maxZ;
         }
-        return diskMax;
+        return Integer.MAX_VALUE;
     }
 
     @Override
