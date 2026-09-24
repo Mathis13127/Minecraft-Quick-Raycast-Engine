@@ -94,9 +94,31 @@ public final class FastNbtReader {
         }
     }
 
+    private static final int STRING_CACHE_SIZE = 1024;
+    private static final int STRING_CACHE_MASK = STRING_CACHE_SIZE - 1;
+    private static final String[] STRING_CACHE = new String[STRING_CACHE_SIZE];
+    private static final int[] HASH_CACHE = new int[STRING_CACHE_SIZE];
+
+    /**
+     * Computes a 32-bit FNV-1a hash directly on a slice of a ByteBuffer with zero heap allocations.
+     *
+     * @param buf    Byte buffer to read from
+     * @param offset Starting byte offset
+     * @param length Number of bytes to hash
+     * @return 32-bit integer hash
+     */
+    public static int hashBytes(ByteBuffer buf, int offset, int length) {
+        int h = 0x811c9dc5;
+        for (int i = 0; i < length; i++) {
+            h ^= (buf.get(offset + i) & 0xFF);
+            h *= 0x01000193;
+        }
+        return h;
+    }
+
     /**
      * Reads a UTF-8 string from the current buffer position.
-     * Uses zero-allocation matching for common Minecraft palette block names.
+     * Uses zero-allocation matching for common Minecraft palette block names and an L1 direct byte-hash cache.
      *
      * @param buf Byte buffer positioned at string length prefix
      * @return Decoded String
@@ -107,6 +129,8 @@ public final class FastNbtReader {
             return "";
         }
         int pos = buf.position();
+
+        // 1. Instant check for common vanilla palette names
         for (int i = 0; i < COMMON_BYTES.length; i++) {
             byte[] common = COMMON_BYTES[i];
             if (common.length == len && matches(buf, pos, len, common)) {
@@ -114,9 +138,32 @@ public final class FastNbtReader {
                 return COMMON_PALETTE[i];
             }
         }
+
+        // 2. Direct byte-hash L1 cache (zero allocation)
+        int hash = hashBytes(buf, pos, len);
+        int slot = hash & STRING_CACHE_MASK;
+        String cached = STRING_CACHE[slot];
+        if (cached != null && HASH_CACHE[slot] == hash && cached.length() == len) {
+            boolean match = true;
+            for (int i = 0; i < len; i++) {
+                if ((char) (buf.get(pos + i) & 0xFF) != cached.charAt(i)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                buf.position(pos + len);
+                return cached;
+            }
+        }
+
+        // 3. Fallback: decode string and cache it in L1 slot
         byte[] bytes = new byte[len];
         buf.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
+        String decoded = new String(bytes, StandardCharsets.UTF_8).intern();
+        HASH_CACHE[slot] = hash;
+        STRING_CACHE[slot] = decoded;
+        return decoded;
     }
 
     /**

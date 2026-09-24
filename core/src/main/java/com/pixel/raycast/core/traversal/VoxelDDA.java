@@ -95,7 +95,13 @@ public final class VoxelDDA {
         int currentSx = x >> 4;
         int currentSy = y >> 4;
         int currentSz = z >> 4;
-        VoxelSection currentSection = grid.getSection(currentSx, currentSy, currentSz);
+        int currentChunkX = currentSx;
+        int currentChunkZ = currentSz;
+        com.pixel.raycast.core.cache.VoxelChunkColumn currentColumn = grid.getColumn(currentSx, currentSz);
+        VoxelSection currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
+        if (currentSection == null) {
+            currentSection = grid.getSection(currentSx, currentSy, currentSz);
+        }
 
         // Determine step direction along each axis
         int stepX = (dirX > 0) ? 1 : ((dirX < 0) ? -1 : 0);
@@ -117,16 +123,12 @@ public final class VoxelDDA {
         com.pixel.raycast.core.shape.SubBox.SubBoxHit subHit = new com.pixel.raycast.core.shape.SubBox.SubBoxHit();
 
         // Chunk tracking registers across horizontal traversal
-        int currentChunkX = currentSx;
-        int currentChunkZ = currentSz;
-        com.pixel.raycast.core.voxel.Heightmap2D currentHm = grid.getHeightmap(currentChunkX, currentChunkZ);
+        com.pixel.raycast.core.voxel.Heightmap2D currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
         short lowestWorldY = grid.getLowestWorldY();
 
         // Point-blank check: start position inside voxel with shape precision
         if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-            short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
-            double tExit = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
-            if (evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, 0.0, tExit, VoxelFace.NONE, blockId, grid, subHit, result)) {
+            if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, 0.0, tMaxX, tMaxY, tMaxZ, VoxelFace.NONE, currentSection, grid, subHit, result)) {
                 return true;
             }
         }
@@ -138,7 +140,8 @@ public final class VoxelDDA {
                 if (currentSx != currentChunkX || currentSz != currentChunkZ) {
                     currentChunkX = currentSx;
                     currentChunkZ = currentSz;
-                    currentHm = grid.getHeightmap(currentChunkX, currentChunkZ);
+                    currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
+                    currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
                 }
 
                 // 1. Chunk-Level Macro-Skip: bypass entire 16x16 chunk column horizontally if above terrain
@@ -189,12 +192,19 @@ public final class VoxelDDA {
                             currentSx = x >> 4;
                             currentSy = y >> 4;
                             currentSz = z >> 4;
-                            currentSection = grid.getSection(currentSx, currentSy, currentSz);
+                            if (currentSx != currentChunkX || currentSz != currentChunkZ) {
+                                currentChunkX = currentSx;
+                                currentChunkZ = currentSz;
+                                currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
+                                currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
+                            }
+                            currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
+                            if (currentSection == null) {
+                                currentSection = grid.getSection(currentSx, currentSy, currentSz);
+                            }
 
                             if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-                                short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
-                                double tExitLanding = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
-                                if (evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tExitLanding, lastFace, blockId, grid, subHit, result)) {
+                                if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tMaxX, tMaxY, tMaxZ, lastFace, currentSection, grid, subHit, result)) {
                                     return true;
                                 }
                             }
@@ -251,12 +261,19 @@ public final class VoxelDDA {
                     currentSx = x >> 4;
                     currentSy = y >> 4;
                     currentSz = z >> 4;
-                    currentSection = grid.getSection(currentSx, currentSy, currentSz);
+                    if (currentSx != currentChunkX || currentSz != currentChunkZ) {
+                        currentChunkX = currentSx;
+                        currentChunkZ = currentSz;
+                        currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
+                        currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
+                    }
+                    currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
+                    if (currentSection == null) {
+                        currentSection = grid.getSection(currentSx, currentSy, currentSz);
+                    }
 
                     if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-                        short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
-                        double tExitLanding = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
-                        if (evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tExitLanding, lastFace, blockId, grid, subHit, result)) {
+                        if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tMaxX, tMaxY, tMaxZ, lastFace, currentSection, grid, subHit, result)) {
                             return true;
                         }
                     }
@@ -300,23 +317,52 @@ public final class VoxelDDA {
             int sy = y >> 4;
             int sz = z >> 4;
             if (sx != currentSx || sy != currentSy || sz != currentSz) {
-                currentSx = sx;
+                if (sx != currentSx || sz != currentSz) {
+                    currentSx = sx;
+                    currentSz = sz;
+                    currentChunkX = sx;
+                    currentChunkZ = sz;
+                    currentColumn = grid.getColumn(sx, sz);
+                    currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(sx, sz);
+                }
                 currentSy = sy;
-                currentSz = sz;
-                currentSection = grid.getSection(sx, sy, sz);
+                currentSection = (currentColumn != null) ? currentColumn.getSection(sy) : null;
+                if (currentSection == null) {
+                    currentSection = grid.getSection(sx, sy, sz);
+                }
             }
 
             // Evaluate occupancy
             if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-                short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
-                double tExit = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
-                if (evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tExit, lastFace, blockId, grid, subHit, result)) {
+                if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tMaxX, tMaxY, tMaxZ, lastFace, currentSection, grid, subHit, result)) {
                     return true;
                 }
             }
         }
 
         return false;
+    }
+
+    private static boolean checkHit(double startX, double startY, double startZ,
+                                    double dirX, double dirY, double dirZ,
+                                    int x, int y, int z,
+                                    double tEntry, double tMaxX, double tMaxY, double tMaxZ,
+                                    VoxelFace face,
+                                    VoxelSection section,
+                                    IVoxelGrid grid,
+                                    com.pixel.raycast.core.shape.SubBox.SubBoxHit subHit,
+                                    RayHitResult result) {
+        if (section.allSolidAreFullCubes()) {
+            short blockId = section.getBlockId(x & 15, y & 15, z & 15);
+            double hitX = startX + tEntry * dirX;
+            double hitY = startY + tEntry * dirY;
+            double hitZ = startZ + tEntry * dirZ;
+            result.set(true, hitX, hitY, hitZ, x, y, z, face, blockId, tEntry);
+            return true;
+        }
+        short blockId = section.getBlockId(x & 15, y & 15, z & 15);
+        double tExit = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
+        return evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, tEntry, tExit, face, blockId, grid, subHit, result);
     }
 
     private static boolean evaluateVoxelHit(double startX, double startY, double startZ,

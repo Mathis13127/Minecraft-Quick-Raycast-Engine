@@ -167,7 +167,7 @@ public final class MinecraftVoxelBridge {
                 Path dimFolder = net.minecraft.world.level.dimension.DimensionType.getStorageFolder(serverLevel.dimension(), rootPath);
                 Path regionDir = dimFolder.resolve("region");
                 if (Files.isDirectory(regionDir)) {
-                    diskFallback = new McaVoxelGrid(BLOCK_REGISTRY, regionDir, (short) level.getMinBuildHeight());
+                    diskFallback = new McaVoxelGrid(BLOCK_REGISTRY, SHAPE_REGISTRY, regionDir, (short) level.getMinBuildHeight());
                     LOGGER.info("Raycast Bridge: Connected Anvil disk fallback for dimension {} at {}",
                             level.dimension().location(), regionDir);
                 }
@@ -206,6 +206,7 @@ public final class MinecraftVoxelBridge {
         }
 
         VoxelSection compiled = new VoxelSection();
+        boolean allFullCubes = true;
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
@@ -213,10 +214,14 @@ public final class MinecraftVoxelBridge {
                     if (!state.isAir()) {
                         short id = getBlockId(state);
                         compiled.setVoxel(x, y, z, true, id);
+                        if (allFullCubes && !SHAPE_REGISTRY.getShape(id).isFullCube()) {
+                            allFullCubes = false;
+                        }
                     }
                 }
             }
         }
+        compiled.setAllSolidAreFullCubes(allFullCubes);
 
         if (column != null) {
             column.setSection(sectionY, compiled);
@@ -255,6 +260,9 @@ public final class MinecraftVoxelBridge {
                 boolean solid = !newState.isAir();
                 short blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
                 voxelSection.setVoxel(localX, localY, localZ, solid, blockId);
+                if (solid && !SHAPE_REGISTRY.getShape(blockId).isFullCube()) {
+                    voxelSection.setAllSolidAreFullCubes(false);
+                }
 
                 VoxelChunkColumn column = section.raycast$getVoxelColumn();
                 if (column != null) {

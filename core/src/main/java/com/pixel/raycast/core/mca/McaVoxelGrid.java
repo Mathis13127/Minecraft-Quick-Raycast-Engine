@@ -24,6 +24,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
+    private final com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry;
     private final Path regionDirectory;
     private final short minWorldY;
     private volatile short highestWorldY = Short.MIN_VALUE;
@@ -34,7 +35,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      * @param registry BlockIdRegistry to map block state names
      */
     public McaVoxelGrid(BlockIdRegistry registry) {
-        this(registry, null, (short) -64);
+        this(registry, null, null, (short) -64);
     }
 
     /**
@@ -44,7 +45,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      * @param regionDirectory Root directory containing .mca region files, or null
      */
     public McaVoxelGrid(BlockIdRegistry registry, Path regionDirectory) {
-        this(registry, regionDirectory, (short) -64);
+        this(registry, null, regionDirectory, (short) -64);
     }
 
     /**
@@ -55,7 +56,20 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      * @param minWorldY       Minimum world build height (e.g. -64 for overworld, 0 for nether)
      */
     public McaVoxelGrid(BlockIdRegistry registry, Path regionDirectory, short minWorldY) {
+        this(registry, null, regionDirectory, minWorldY);
+    }
+
+    /**
+     * Constructs an McaVoxelGrid with an optional ShapeRegistry for full-cube classification, on-disk region directory and dynamic min build height.
+     *
+     * @param registry        BlockIdRegistry to map block state names
+     * @param shapeRegistry   Optional ShapeRegistry for full-cube collision analysis
+     * @param regionDirectory Root directory containing .mca region files, or null
+     * @param minWorldY       Minimum world build height (e.g. -64 for overworld, 0 for nether)
+     */
+    public McaVoxelGrid(BlockIdRegistry registry, com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry, Path regionDirectory, short minWorldY) {
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
+        this.shapeRegistry = (shapeRegistry != null) ? shapeRegistry : new com.pixel.raycast.core.shape.ShapeRegistry();
         this.regionDirectory = regionDirectory;
         this.minWorldY = minWorldY;
     }
@@ -103,8 +117,6 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     public short getHighestWorldY() {
         return highestWorldY;
     }
-
-    private final com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry = new com.pixel.raycast.core.shape.ShapeRegistry();
 
     @Override
     public com.pixel.raycast.core.shape.ShapeRegistry getShapeRegistry() {
@@ -198,7 +210,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
                 if (java.nio.file.Files.exists(mcaFile)) {
                     try {
-                        return new McaRegionReader(mcaFile, registry);
+                        return new McaRegionReader(mcaFile, registry, shapeRegistry);
                     } catch (IOException e) {
                         LOGGER.log(System.Logger.Level.WARNING,
                                 "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());

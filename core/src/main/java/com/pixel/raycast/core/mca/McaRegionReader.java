@@ -47,6 +47,7 @@ public final class McaRegionReader implements Closeable {
     private final int regionZ;
     private final int[] sectorOffsets = new int[1024];
     private final BlockIdRegistry registry;
+    private final com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry;
 
     /**
      * Functional callback for consuming parsed chunk sections.
@@ -70,8 +71,21 @@ public final class McaRegionReader implements Closeable {
      * @throws IOException If file does not exist or cannot be read
      */
     public McaRegionReader(Path path, BlockIdRegistry registry) throws IOException {
+        this(path, registry, null);
+    }
+
+    /**
+     * Opens an Anvil MCA region file with an optional ShapeRegistry for full-cube collision analysis.
+     *
+     * @param path          Path to the r.X.Z.mca file
+     * @param registry      BlockIdRegistry for registering block types
+     * @param shapeRegistry Optional ShapeRegistry for full-cube classification
+     * @throws IOException If file does not exist or cannot be read
+     */
+    public McaRegionReader(Path path, BlockIdRegistry registry, com.pixel.raycast.core.shape.ShapeRegistry shapeRegistry) throws IOException {
         this.filePath = Objects.requireNonNull(path, "Path cannot be null");
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
+        this.shapeRegistry = shapeRegistry;
 
         String fileName = path.getFileName().toString();
         Matcher matcher = REGION_FILE_PATTERN.matcher(fileName);
@@ -388,7 +402,7 @@ public final class McaRegionReader implements Closeable {
                 consumer.accept(sectionY, VoxelSection.EMPTY);
                 return 1;
             }
-            VoxelSection section = BlockStatePaletteUnpacker.unpackDirect(paletteIds, data);
+            VoxelSection section = BlockStatePaletteUnpacker.unpackDirect(paletteIds, data, shapeRegistry);
             consumer.accept(sectionY, section);
             return 1;
         } else if (sectionY != Integer.MIN_VALUE && data != null && paletteIds == null) {

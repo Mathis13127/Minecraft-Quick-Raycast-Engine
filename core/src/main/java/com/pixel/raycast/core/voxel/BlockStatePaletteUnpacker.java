@@ -1,11 +1,13 @@
 package com.pixel.raycast.core.voxel;
 
+import com.pixel.raycast.core.shape.ShapeRegistry;
+
 import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * High-performance bit unpacker for Minecraft Anvil (1.16+) packed block state long arrays.
- * Expands packed palette entries into 1-cycle bitmasks and 16-bit block IDs.
+ * Ultra-high-performance bit unpacker for Minecraft Anvil (1.16+) packed block state long arrays.
+ * Uses divisionless bitshift unrolling to expand packed palette entries into 1-cycle bitmasks in CPU registers.
  */
 public final class BlockStatePaletteUnpacker {
 
@@ -19,9 +21,7 @@ public final class BlockStatePaletteUnpacker {
      * @return Fully populated VoxelSection
      */
     public static VoxelSection unpack(short[] paletteIds, long[] data) {
-        VoxelSection section = new VoxelSection();
-        unpackInto(paletteIds, data, section);
-        return section;
+        return unpackDirect(paletteIds, data, null);
     }
 
     /**
@@ -32,6 +32,18 @@ public final class BlockStatePaletteUnpacker {
      * @param target     Target section to populate
      */
     public static void unpackInto(short[] paletteIds, long[] data, VoxelSection target) {
+        unpackInto(paletteIds, data, target, null);
+    }
+
+    /**
+     * Unpacks block states into an existing {@link VoxelSection} with optional full-cube validation.
+     *
+     * @param paletteIds    Array of 16-bit block IDs corresponding to each palette index
+     * @param data          Packed long array containing bit fields
+     * @param target        Target section to populate
+     * @param shapeRegistry Optional ShapeRegistry for full-cube evaluation
+     */
+    public static void unpackInto(short[] paletteIds, long[] data, VoxelSection target, ShapeRegistry shapeRegistry) {
         Objects.requireNonNull(target, "Target VoxelSection cannot be null");
         target.clear();
 
@@ -46,6 +58,8 @@ public final class BlockStatePaletteUnpacker {
                 Arrays.fill(target.getBitmask(), ~0L);
                 Arrays.fill(target.getBlockIds(), blockId);
                 target.recalculateSolidCount();
+                boolean fullCube = (shapeRegistry == null) || shapeRegistry.getShape(blockId).isFullCube();
+                target.setAllSolidAreFullCubes(fullCube);
             }
             return;
         }
@@ -54,7 +68,6 @@ public final class BlockStatePaletteUnpacker {
             throw new IllegalArgumentException("Data longs array cannot be null or empty when palette has multiple entries (size=" + paletteIds.length + ")");
         }
 
-        // Compute bits per block: min 4, ceil(log2(palette.length))
         int bitsPerBlock = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteIds.length - 1));
         int entriesPerLong = 64 / bitsPerBlock;
         long bitMask = (1L << bitsPerBlock) - 1L;
@@ -63,39 +76,57 @@ public final class BlockStatePaletteUnpacker {
         short[] ids = target.getBlockIds();
         int solidCount = 0;
 
-        for (int i = 0; i < VoxelSection.VOXEL_COUNT; i++) {
-            int longIndex = i / entriesPerLong;
-            int bitOffset = (i % entriesPerLong) * bitsPerBlock;
+        int voxelIdx = 0;
+        for (int l = 0; l < data.length && voxelIdx < VoxelSection.VOXEL_COUNT; l++) {
+            long word = data[l];
+            int countInWord = Math.min(entriesPerLong, VoxelSection.VOXEL_COUNT - voxelIdx);
+            for (int e = 0; e < countInWord; e++) {
+                int paletteIndex = (int) (word & bitMask);
+                word >>>= bitsPerBlock;
 
-            if (longIndex >= data.length) {
-                throw new IllegalStateException("Corrupted chunk data: expected at least " + (longIndex + 1) + " longs, but data length is " + data.length);
-            }
+                if (paletteIndex >= paletteIds.length) {
+                    throw new IllegalStateException("Palette index out of bounds: index=" + paletteIndex + ", palette size=" + paletteIds.length);
+                }
 
-            int paletteIndex = (int) ((data[longIndex] >>> bitOffset) & bitMask);
-            if (paletteIndex >= paletteIds.length) {
-                throw new IllegalStateException("Palette index out of bounds: index=" + paletteIndex + ", palette size=" + paletteIds.length);
-            }
+                short blockId = paletteIds[paletteIndex];
+                ids[voxelIdx] = blockId;
 
-            short blockId = paletteIds[paletteIndex];
-            ids[i] = blockId;
-
-            if (blockId != BlockIdRegistry.AIR_ID) {
-                mask[i >>> 6] |= (1L << (i & 63));
-                solidCount++;
+                if (blockId != BlockIdRegistry.AIR_ID) {
+                    mask[voxelIdx >>> 6] |= (1L << (voxelIdx & 63));
+                    solidCount++;
+                }
+                voxelIdx++;
             }
         }
 
+        if (voxelIdx < VoxelSection.VOXEL_COUNT) {
+            throw new IllegalStateException("Corrupted chunk data: expected " + VoxelSection.VOXEL_COUNT + " voxels, but only unpacked " + voxelIdx);
+        }
+
         target.recalculateSolidCount();
+        target.setAllSolidAreFullCubes(checkAllFullCubes(paletteIds, shapeRegistry));
     }
 
     /**
-     * Efficiently builds a section directly with verified solid count.
+     * Efficiently builds a section directly with verified solid count using divisionless unpacking.
      *
      * @param paletteIds Array of 16-bit block IDs corresponding to each palette index
      * @param data       Packed long array containing bit fields
      * @return Newly constructed VoxelSection
      */
     public static VoxelSection unpackDirect(short[] paletteIds, long[] data) {
+        return unpackDirect(paletteIds, data, null);
+    }
+
+    /**
+     * Efficiently builds a section directly with full-cube fast-path analysis and compact homogeneous allocation.
+     *
+     * @param paletteIds    Array of 16-bit block IDs corresponding to each palette index
+     * @param data          Packed long array containing bit fields
+     * @param shapeRegistry Optional ShapeRegistry for full-cube classification
+     * @return Newly constructed VoxelSection
+     */
+    public static VoxelSection unpackDirect(short[] paletteIds, long[] data, ShapeRegistry shapeRegistry) {
         if (paletteIds == null || paletteIds.length == 0) {
             return VoxelSection.EMPTY;
         }
@@ -105,47 +136,62 @@ public final class BlockStatePaletteUnpacker {
             if (blockId == BlockIdRegistry.AIR_ID) {
                 return VoxelSection.EMPTY;
             }
-            long[] mask = new long[VoxelSection.MASK_WORDS];
-            short[] ids = new short[VoxelSection.VOXEL_COUNT];
-            Arrays.fill(mask, ~0L);
-            Arrays.fill(ids, blockId);
-            return new VoxelSection(mask, ids, VoxelSection.VOXEL_COUNT);
+            boolean fullCube = (shapeRegistry != null) && shapeRegistry.getShape(blockId).isFullCube();
+            return VoxelSection.createHomogeneous(blockId, fullCube);
+        }
+
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("Data longs array cannot be empty when palette size > 1");
         }
 
         long[] mask = new long[VoxelSection.MASK_WORDS];
         short[] ids = new short[VoxelSection.VOXEL_COUNT];
         int solidCount = 0;
 
-        if (data == null || data.length == 0) {
-            throw new IllegalArgumentException("Data longs array cannot be empty when palette size > 1");
-        }
-
         int bitsPerBlock = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteIds.length - 1));
         int entriesPerLong = 64 / bitsPerBlock;
         long bitMask = (1L << bitsPerBlock) - 1L;
 
-        for (int i = 0; i < VoxelSection.VOXEL_COUNT; i++) {
-            int longIndex = i / entriesPerLong;
-            int bitOffset = (i % entriesPerLong) * bitsPerBlock;
+        int voxelIdx = 0;
+        for (int l = 0; l < data.length && voxelIdx < VoxelSection.VOXEL_COUNT; l++) {
+            long word = data[l];
+            int countInWord = Math.min(entriesPerLong, VoxelSection.VOXEL_COUNT - voxelIdx);
+            for (int e = 0; e < countInWord; e++) {
+                int paletteIndex = (int) (word & bitMask);
+                word >>>= bitsPerBlock;
 
-            if (longIndex >= data.length) {
-                throw new IllegalStateException("Corrupted chunk: index " + longIndex + " exceeds data length " + data.length);
-            }
+                if (paletteIndex >= paletteIds.length) {
+                    throw new IllegalStateException("Palette index " + paletteIndex + " exceeds palette size " + paletteIds.length);
+                }
 
-            int paletteIndex = (int) ((data[longIndex] >>> bitOffset) & bitMask);
-            if (paletteIndex >= paletteIds.length) {
-                throw new IllegalStateException("Palette index " + paletteIndex + " exceeds palette size " + paletteIds.length);
-            }
+                short blockId = paletteIds[paletteIndex];
+                ids[voxelIdx] = blockId;
 
-            short blockId = paletteIds[paletteIndex];
-            ids[i] = blockId;
-
-            if (blockId != BlockIdRegistry.AIR_ID) {
-                mask[i >>> 6] |= (1L << (i & 63));
-                solidCount++;
+                if (blockId != BlockIdRegistry.AIR_ID) {
+                    mask[voxelIdx >>> 6] |= (1L << (voxelIdx & 63));
+                    solidCount++;
+                }
+                voxelIdx++;
             }
         }
 
-        return new VoxelSection(mask, ids, solidCount);
+        if (voxelIdx < VoxelSection.VOXEL_COUNT) {
+            throw new IllegalStateException("Corrupted chunk data: expected " + VoxelSection.VOXEL_COUNT + " voxels, but only unpacked " + voxelIdx);
+        }
+
+        boolean fullCubes = checkAllFullCubes(paletteIds, shapeRegistry);
+        return new VoxelSection(mask, ids, solidCount, fullCubes);
+    }
+
+    private static boolean checkAllFullCubes(short[] paletteIds, ShapeRegistry shapeRegistry) {
+        if (shapeRegistry == null) {
+            return false;
+        }
+        for (short pid : paletteIds) {
+            if (pid != BlockIdRegistry.AIR_ID && !shapeRegistry.getShape(pid).isFullCube()) {
+                return false;
+            }
+        }
+        return true;
     }
 }
