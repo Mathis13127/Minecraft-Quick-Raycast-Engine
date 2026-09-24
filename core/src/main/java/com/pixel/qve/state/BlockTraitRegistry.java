@@ -114,6 +114,24 @@ public final class BlockTraitRegistry {
     }
 
     /**
+     * Fast-path check: returns true if the block is a cross-quad plant or ground vegetation
+     * (short grass, flowers, saplings, crops, ferns).
+     *
+     * @param blockId 32-bit block ID
+     * @return True if cross plant
+     */
+    public boolean isCrossPlant(int blockId) {
+        if (blockId == BlockIdRegistry.AIR_ID) {
+            return false;
+        }
+        byte[] local = this.traits;
+        if (blockId >= 0 && blockId < local.length) {
+            return (local[blockId] & BlockTraits.CROSS_PLANT) != 0;
+        }
+        return false;
+    }
+
+    /**
      * Fast-path check: returns true if the block is a fluid (water, lava).
      *
      * @param blockId 32-bit block ID

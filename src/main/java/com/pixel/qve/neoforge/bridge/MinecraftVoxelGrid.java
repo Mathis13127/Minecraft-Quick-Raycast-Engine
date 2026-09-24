@@ -176,7 +176,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
-                    int h = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
+                    int h = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
                     if (h > level.getMinBuildHeight()) {
                         colHm.setHeight(x, z, (short) (h - 1));
                     } else {

@@ -303,6 +303,13 @@ public final class MinecraftVoxelBridge {
             if (mcShape.isEmpty()) {
                 // Non-solid pass-through decoration (grass, flowers, torches, rails, saplings, etc.)
                 traits |= BlockTraits.PASS_THROUGH;
+                if (block instanceof net.minecraft.world.level.block.BushBlock
+                        || block instanceof net.minecraft.world.level.block.SugarCaneBlock
+                        || state.is(net.minecraft.tags.BlockTags.FLOWERS)
+                        || state.is(net.minecraft.tags.BlockTags.CROPS)
+                        || state.is(net.minecraft.tags.BlockTags.SAPLINGS)) {
+                    traits |= BlockTraits.CROSS_PLANT;
+                }
             } else if (state.isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO)) {
                 // Full 1x1x1 cube (stone, dirt, grass, planks, ores, ice, glass, etc.)
                 traits |= BlockTraits.TERRAIN_SOLID;

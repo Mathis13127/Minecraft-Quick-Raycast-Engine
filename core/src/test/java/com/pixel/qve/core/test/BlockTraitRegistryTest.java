@@ -57,6 +57,13 @@ class BlockTraitRegistryTest {
         registry.setTraits(leavesId, (byte) (BlockTraits.TERRAIN_SOLID | BlockTraits.FOLIAGE));
         assertTrue(registry.isTerrainSolid(leavesId));
         assertTrue(registry.isSurfaceMeshable(leavesId));
+
+        int grassPlantId = 6;
+        registry.setTraits(grassPlantId, (byte) (BlockTraits.PASS_THROUGH | BlockTraits.CROSS_PLANT));
+        assertFalse(registry.isTerrainSolid(grassPlantId));
+        assertFalse(registry.isSurfaceMeshable(grassPlantId));
+        assertTrue(registry.isPassThrough(grassPlantId));
+        assertTrue(registry.isCrossPlant(grassPlantId));
     }
 
     @Test

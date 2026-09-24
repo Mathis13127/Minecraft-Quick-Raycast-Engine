@@ -27,5 +27,8 @@ public final class BlockTraits {
     /** Completely invisible block producing no visual quads (air, structure void, light block, barrier). */
     public static final byte INVISIBLE        = 1 << 6;
 
+    /** Cross-quad plant or ground vegetation (short grass, flowers, saplings, crops, ferns). */
+    public static final byte CROSS_PLANT      = (byte) (1 << 7);
+
     private BlockTraits() {}
 }

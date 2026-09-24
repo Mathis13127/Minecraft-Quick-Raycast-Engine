@@ -137,4 +137,23 @@ public class MinecraftVoxelBridgeTest {
         assertEquals(BlockIdRegistry.AIR_ID, section.getBlockId(3, 7, 5));
         assertEquals(Heightmap2D.VOID_Y, column.getHeightmap().getHeight(3, 5));
     }
+
+    @Test
+    @DisplayName("Verify plant blocks (short grass, poppy, dandelion) resolve CROSS_PLANT trait")
+    void testPlantTraitResolution() {
+        int grassPlantId = MinecraftVoxelBridge.getBlockId(Blocks.SHORT_GRASS.defaultBlockState());
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isPassThrough(grassPlantId));
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isCrossPlant(grassPlantId));
+        assertFalse(MinecraftVoxelBridge.getTraitRegistry().isTerrainSolid(grassPlantId));
+        assertFalse(MinecraftVoxelBridge.getTraitRegistry().isSurfaceMeshable(grassPlantId));
+
+        int poppyId = MinecraftVoxelBridge.getBlockId(Blocks.POPPY.defaultBlockState());
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isPassThrough(poppyId));
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isCrossPlant(poppyId));
+        assertFalse(MinecraftVoxelBridge.getTraitRegistry().isTerrainSolid(poppyId));
+
+        int dandelionId = MinecraftVoxelBridge.getBlockId(Blocks.DANDELION.defaultBlockState());
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isPassThrough(dandelionId));
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isCrossPlant(dandelionId));
+    }
 }
