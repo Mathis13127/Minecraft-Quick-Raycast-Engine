@@ -59,8 +59,44 @@ public final class FastNbtReader {
         return true;
     }
 
+    private static final String[] COMMON_PALETTE = {
+        "minecraft:air",
+        "minecraft:cave_air",
+        "minecraft:void_air",
+        "minecraft:stone",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:bedrock",
+        "minecraft:deepslate",
+        "minecraft:water",
+        "minecraft:lava",
+        "minecraft:sand",
+        "minecraft:sandstone",
+        "minecraft:gravel",
+        "minecraft:oak_log",
+        "minecraft:oak_leaves",
+        "minecraft:spruce_log",
+        "minecraft:spruce_leaves",
+        "minecraft:birch_log",
+        "minecraft:birch_leaves",
+        "minecraft:short_grass",
+        "minecraft:tall_grass",
+        "minecraft:snow",
+        "minecraft:snow_block",
+        "minecraft:ice"
+    };
+
+    private static final byte[][] COMMON_BYTES;
+    static {
+        COMMON_BYTES = new byte[COMMON_PALETTE.length][];
+        for (int i = 0; i < COMMON_PALETTE.length; i++) {
+            COMMON_BYTES[i] = COMMON_PALETTE[i].getBytes(StandardCharsets.UTF_8);
+        }
+    }
+
     /**
      * Reads a UTF-8 string from the current buffer position.
+     * Uses zero-allocation matching for common Minecraft palette block names.
      *
      * @param buf Byte buffer positioned at string length prefix
      * @return Decoded String
@@ -69,6 +105,14 @@ public final class FastNbtReader {
         int len = buf.getShort() & 0xFFFF;
         if (len == 0) {
             return "";
+        }
+        int pos = buf.position();
+        for (int i = 0; i < COMMON_BYTES.length; i++) {
+            byte[] common = COMMON_BYTES[i];
+            if (common.length == len && matches(buf, pos, len, common)) {
+                buf.position(pos + len);
+                return COMMON_PALETTE[i];
+            }
         }
         byte[] bytes = new byte[len];
         buf.get(bytes);

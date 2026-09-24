@@ -105,22 +105,24 @@ public final class BlockStatePaletteUnpacker {
      */
     public static VoxelSection unpackDirect(short[] paletteIds, long[] data) {
         if (paletteIds == null || paletteIds.length == 0) {
-            return new VoxelSection();
+            return VoxelSection.EMPTY;
+        }
+
+        if (paletteIds.length == 1) {
+            short blockId = paletteIds[0];
+            if (blockId == BlockIdRegistry.AIR_ID) {
+                return VoxelSection.EMPTY;
+            }
+            long[] mask = new long[VoxelSection.MASK_WORDS];
+            short[] ids = new short[VoxelSection.VOXEL_COUNT];
+            Arrays.fill(mask, ~0L);
+            Arrays.fill(ids, blockId);
+            return new VoxelSection(mask, ids, VoxelSection.VOXEL_COUNT);
         }
 
         long[] mask = new long[VoxelSection.MASK_WORDS];
         short[] ids = new short[VoxelSection.VOXEL_COUNT];
         int solidCount = 0;
-
-        if (paletteIds.length == 1) {
-            short blockId = paletteIds[0];
-            if (blockId != BlockIdRegistry.AIR_ID) {
-                Arrays.fill(mask, ~0L);
-                Arrays.fill(ids, blockId);
-                solidCount = VoxelSection.VOXEL_COUNT;
-            }
-            return new VoxelSection(mask, ids, solidCount);
-        }
 
         if (data == null || data.length == 0) {
             throw new IllegalArgumentException("Data longs array cannot be empty when palette size > 1");

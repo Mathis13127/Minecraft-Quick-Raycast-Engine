@@ -17,6 +17,9 @@ public final class VoxelSection {
     /** Number of 64-bit words needed to represent 4096 occupancy bits (64). */
     public static final int MASK_WORDS = VOXEL_COUNT / 64; // 64 longs = 512 bytes
 
+    /** Immutable empty section singleton representing pure air. */
+    public static final VoxelSection EMPTY = new VoxelSection();
+
     private final long[] bitmask;
     private final short[] blockIds;
     private int solidCount;

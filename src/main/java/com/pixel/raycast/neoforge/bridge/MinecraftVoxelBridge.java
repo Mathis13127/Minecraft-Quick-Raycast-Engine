@@ -241,6 +241,14 @@ public final class MinecraftVoxelBridge {
         if (section != null) {
             VoxelSection voxelSection = section.raycast$getVoxelSection();
             if (voxelSection != null) {
+                if (voxelSection == VoxelSection.EMPTY) {
+                    voxelSection = new VoxelSection();
+                    section.raycast$setVoxelSection(voxelSection);
+                    VoxelChunkColumn column = section.raycast$getVoxelColumn();
+                    if (column != null) {
+                        column.setSection(section.raycast$getSectionY(), voxelSection);
+                    }
+                }
                 boolean solid = !newState.isAir();
                 short blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
                 voxelSection.setVoxel(localX, localY, localZ, solid, blockId);
