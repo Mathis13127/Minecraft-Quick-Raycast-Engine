@@ -156,4 +156,19 @@ public class MinecraftVoxelBridgeTest {
         assertTrue(MinecraftVoxelBridge.getTraitRegistry().isPassThrough(dandelionId));
         assertTrue(MinecraftVoxelBridge.getTraitRegistry().isCrossPlant(dandelionId));
     }
+
+    @Test
+    @DisplayName("Verify fluid blocks (water, lava) resolve FLUID and TRANSLUCENT traits, and are never INVISIBLE")
+    void testFluidTraitResolution() {
+        int waterId = MinecraftVoxelBridge.getBlockId(Blocks.WATER.defaultBlockState());
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isFluid(waterId), "Water must have FLUID trait");
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isTranslucent(waterId), "Water must have TRANSLUCENT trait");
+        assertFalse(MinecraftVoxelBridge.getTraitRegistry().isInvisible(waterId), "Water must NEVER have INVISIBLE trait");
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isSurfaceMeshable(waterId), "Water must be surface meshable");
+
+        int lavaId = MinecraftVoxelBridge.getBlockId(Blocks.LAVA.defaultBlockState());
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isFluid(lavaId), "Lava must have FLUID trait");
+        assertFalse(MinecraftVoxelBridge.getTraitRegistry().isInvisible(lavaId), "Lava must NEVER have INVISIBLE trait");
+        assertTrue(MinecraftVoxelBridge.getTraitRegistry().isSurfaceMeshable(lavaId), "Lava must be surface meshable");
+    }
 }

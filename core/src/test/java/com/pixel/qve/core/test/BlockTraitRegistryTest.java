@@ -76,4 +76,17 @@ class BlockTraitRegistryTest {
         assertTrue(registry.isPartialShape(largeId));
         assertFalse(registry.isTerrainSolid(largeId));
     }
+
+    @Test
+    @DisplayName("Verify FLUID blocks automatically strip INVISIBLE flag and isInvisible returns false")
+    void testFluidCannotBeInvisible() {
+        BlockTraitRegistry registry = new BlockTraitRegistry();
+        int waterId = 100;
+        // Even if explicitly passed with INVISIBLE bit set
+        registry.setTraits(waterId, (byte) (BlockTraits.FLUID | BlockTraits.INVISIBLE | BlockTraits.TRANSLUCENT));
+
+        assertTrue(registry.isFluid(waterId), "Block must be FLUID");
+        assertFalse(registry.isInvisible(waterId), "FLUID block must NEVER be INVISIBLE");
+        assertEquals(0, registry.getTraits(waterId) & BlockTraits.INVISIBLE, "INVISIBLE bit must be stripped");
+    }
 }

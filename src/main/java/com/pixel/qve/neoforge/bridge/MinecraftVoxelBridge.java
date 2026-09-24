@@ -290,17 +290,17 @@ public final class MinecraftVoxelBridge {
 
         byte traits = 0;
 
-        // 1. Invisible render shape
-        if (state.getRenderShape() == net.minecraft.world.level.block.RenderShape.INVISIBLE) {
-            traits |= BlockTraits.INVISIBLE;
-        }
-
-        // 2. Fluid matter
+        // 1. Fluid matter (fluids are visible matter, never invisible)
         if (!state.getFluidState().isEmpty()) {
             traits |= BlockTraits.FLUID;
             traits |= BlockTraits.TRANSLUCENT;
             traits |= BlockTraits.PASS_THROUGH;
             return traits;
+        }
+
+        // 2. Invisible render shape (air, structure void, barrier, light block)
+        if (state.getRenderShape() == net.minecraft.world.level.block.RenderShape.INVISIBLE) {
+            traits |= BlockTraits.INVISIBLE;
         }
 
         // 3. Collision shape and solidity classification

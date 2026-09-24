@@ -28,6 +28,9 @@ public final class BlockTraitRegistry {
     public synchronized void setTraits(int blockId, byte traitFlags) {
         if (blockId < 0) return;
         ensureCapacity(blockId + 1);
+        if ((traitFlags & BlockTraits.FLUID) != 0) {
+            traitFlags = (byte) (traitFlags & ~BlockTraits.INVISIBLE);
+        }
         traits[blockId] = traitFlags;
     }
 
@@ -158,7 +161,14 @@ public final class BlockTraitRegistry {
      * @return True if invisible
      */
     public boolean isInvisible(int blockId) {
-        return (getTraits(blockId) & BlockTraits.INVISIBLE) != 0;
+        if (blockId == BlockIdRegistry.AIR_ID) {
+            return true;
+        }
+        byte t = getTraits(blockId);
+        if ((t & BlockTraits.FLUID) != 0) {
+            return false;
+        }
+        return (t & BlockTraits.INVISIBLE) != 0;
     }
 
     private void ensureCapacity(int minCapacity) {
