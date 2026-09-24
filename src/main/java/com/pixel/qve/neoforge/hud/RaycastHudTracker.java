@@ -5,8 +5,8 @@ import com.pixel.qve.api.raycast.RayHitResult;
 import com.pixel.qve.raycast.RaycastThreadPool;
 import com.pixel.qve.neoforge.api.VoxelRaycastAPI;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge;
+import com.pixel.qve.neoforge.network.ClientboundRaycastHudPayload;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -16,6 +16,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,9 +27,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Real-time HUD overlay tracker for players.
- * Continuously raycasts along the player's crosshair asynchronously up to 99,999+ blocks,
- * displaying the targeted block, coordinates, hit face, distance, and nanosecond latency
- * directly in the action bar above the hotbar.
+ * Continuously raycasts along the player's crosshair asynchronously up to 99,999+ blocks.
+ * Supports both a dedicated high-fidelity client HUD card and a stabilized, non-jittering action bar fallback.
  */
 public final class RaycastHudTracker {
 
@@ -36,6 +36,15 @@ public final class RaycastHudTracker {
 
     /** Default reach distance requested for real-time tracking (99,999 blocks). */
     public static final double DEFAULT_MAX_DISTANCE = 99_999.0;
+
+    /**
+     * Display mode for the HUD telemetry.
+     */
+    public enum HudDisplayMode {
+        CARD,
+        ACTIONBAR,
+        BOTH
+    }
 
     private static final Map<UUID, HudSession> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
 
@@ -46,15 +55,27 @@ public final class RaycastHudTracker {
      */
     public static final class HudSession {
         private volatile double maxDistance;
+        private volatile HudDisplayMode mode;
         private final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         /**
-         * Constructs a new HUD tracking session.
+         * Constructs a new HUD tracking session with default BOTH display mode.
          *
          * @param maxDistance Maximum reach distance in blocks
          */
         public HudSession(double maxDistance) {
+            this(maxDistance, HudDisplayMode.BOTH);
+        }
+
+        /**
+         * Constructs a new HUD tracking session with explicit display mode.
+         *
+         * @param maxDistance Maximum reach distance in blocks
+         * @param mode        Display mode
+         */
+        public HudSession(double maxDistance, HudDisplayMode mode) {
             this.maxDistance = maxDistance;
+            this.mode = mode != null ? mode : HudDisplayMode.BOTH;
         }
 
         /**
@@ -73,6 +94,24 @@ public final class RaycastHudTracker {
          */
         public void setMaxDistance(double maxDistance) {
             this.maxDistance = maxDistance;
+        }
+
+        /**
+         * Gets the display mode.
+         *
+         * @return Display mode
+         */
+        public HudDisplayMode getMode() {
+            return mode;
+        }
+
+        /**
+         * Sets the display mode.
+         *
+         * @param mode Display mode
+         */
+        public void setMode(HudDisplayMode mode) {
+            this.mode = mode != null ? mode : HudDisplayMode.BOTH;
         }
 
         /**
@@ -119,7 +158,39 @@ public final class RaycastHudTracker {
         if (ACTIVE_SESSIONS.containsKey(uuid)) {
             return disableHud(player, source);
         } else {
-            return enableHud(player, source, DEFAULT_MAX_DISTANCE);
+            return enableHud(player, source, DEFAULT_MAX_DISTANCE, HudDisplayMode.BOTH);
+        }
+    }
+
+    /**
+     * Command handler for changing the display mode of an active session.
+     *
+     * @param ctx  Command context
+     * @param mode Target display mode
+     * @return 1 on success, 0 on failure
+     */
+    public static int executeSetMode(CommandContext<CommandSourceStack> ctx, HudDisplayMode mode) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("§cThis command can only be executed by a player."));
+            return 0;
+        }
+
+        UUID uuid = player.getUUID();
+        HudSession session = ACTIVE_SESSIONS.get(uuid);
+        if (session != null) {
+            session.setMode(mode);
+            if (mode == HudDisplayMode.CARD) {
+                player.displayClientMessage(Component.empty(), true);
+            } else if (mode == HudDisplayMode.ACTIONBAR) {
+                PacketDistributor.sendToPlayer(player, ClientboundRaycastHudPayload.inactive());
+            }
+            source.sendSuccess(() -> Component.literal(String.format(
+                    "§6[QVE] §aHUD display mode updated to §e%s§7.", mode.name()
+            )), false);
+            return 1;
+        } else {
+            return enableHud(player, source, DEFAULT_MAX_DISTANCE, mode);
         }
     }
 
@@ -142,11 +213,11 @@ public final class RaycastHudTracker {
         if (session != null) {
             session.setMaxDistance(distance);
             source.sendSuccess(() -> Component.literal(String.format(
-                    "§6[QRE] §aHUD Target Tracking reach updated to §f%,.1fm§7.", distance
+                    "§6[QVE] §aHUD Target Tracking reach updated to §f%,.1fm§7.", distance
             )), false);
             return 1;
         } else {
-            return enableHud(player, source, distance);
+            return enableHud(player, source, distance, HudDisplayMode.BOTH);
         }
     }
 
@@ -163,7 +234,7 @@ public final class RaycastHudTracker {
             source.sendFailure(Component.literal("§cThis command can only be executed by a player."));
             return 0;
         }
-        return enableHud(player, source, distance);
+        return enableHud(player, source, distance, HudDisplayMode.BOTH);
     }
 
     /**
@@ -181,12 +252,12 @@ public final class RaycastHudTracker {
         return disableHud(player, source);
     }
 
-    private static int enableHud(ServerPlayer player, CommandSourceStack source, double distance) {
+    private static int enableHud(ServerPlayer player, CommandSourceStack source, double distance, HudDisplayMode mode) {
         UUID uuid = player.getUUID();
-        ACTIVE_SESSIONS.put(uuid, new HudSession(distance));
+        ACTIVE_SESSIONS.put(uuid, new HudSession(distance, mode));
         source.sendSuccess(() -> Component.literal(String.format(
-                "§6[QRE] §aHUD Target Tracking ENABLED §7(Max reach: §f%,.1fm§7). Look at any block to inspect!",
-                distance
+                "§6[QVE] §aHUD Target Tracking ENABLED §7(Reach: §f%,.1fm§7, Mode: §e%s§7).",
+                distance, mode.name()
         )), false);
         return 1;
     }
@@ -194,8 +265,9 @@ public final class RaycastHudTracker {
     private static int disableHud(ServerPlayer player, CommandSourceStack source) {
         UUID uuid = player.getUUID();
         ACTIVE_SESSIONS.remove(uuid);
+        PacketDistributor.sendToPlayer(player, ClientboundRaycastHudPayload.inactive());
         player.displayClientMessage(Component.empty(), true);
-        source.sendSuccess(() -> Component.literal("§6[QRE] §cHUD Target Tracking DISABLED."), false);
+        source.sendSuccess(() -> Component.literal("§6[QVE] §cHUD Target Tracking DISABLED."), false);
         return 1;
     }
 
@@ -250,44 +322,74 @@ public final class RaycastHudTracker {
                     latencyStr = String.format("§e%.2f ms", elapsedNs / 1_000_000.0);
                 }
 
-                Component message;
+                int blockId = 0;
+                String blockName = "";
+                String props = "";
+                String faceName = "NONE";
+
                 if (hit.isHit()) {
-                    int blockId = hit.getBlockId();
-                    String blockName = MinecraftVoxelBridge.getBlockRegistry().getName(blockId);
+                    blockId = hit.getBlockId();
+                    blockName = MinecraftVoxelBridge.getBlockRegistry().getName(blockId);
                     if (blockName == null || blockName.isEmpty()) {
                         blockName = "unknown";
                     }
-                    String props = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().formatProperties(blockId);
-                    String propsSuffix = props.isEmpty() ? "" : " §e" + props;
+                    props = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().formatProperties(blockId);
+                    if (hit.getFace() != null) {
+                        faceName = hit.getFace().name();
+                    }
+                }
 
-                    String line1 = String.format(
-                            "§6[QVE] %s §8| §e%.1fm §8| §f[%d, %d, %d] §8(§d%s§8)",
+                // Construct network telemetry payload for dedicated client HUD card
+                ClientboundRaycastHudPayload payload = new ClientboundRaycastHudPayload(
+                        true,
+                        hit.isHit(),
+                        elapsedNs,
+                        hit.getDistance(),
+                        hit.getBlockX(),
+                        hit.getBlockY(),
+                        hit.getBlockZ(),
+                        faceName,
+                        blockId,
+                        blockName,
+                        props,
+                        maxDist
+                );
+
+                // Build clean, stabilized action bar message (no newlines, essential telemetry firmly anchored)
+                String abMessage;
+                if (hit.isHit()) {
+                    String shortName = blockName.startsWith("minecraft:") ? blockName.substring(10) : blockName;
+                    abMessage = String.format(
+                            "§6[QVE] §a%s §8│ §e%.1fm §8│ §f[%d, %d, %d] §8│ §b%s §8(#%d)",
                             latencyStr,
                             hit.getDistance(),
                             hit.getBlockX(), hit.getBlockY(), hit.getBlockZ(),
-                            hit.getFace()
+                            shortName,
+                            blockId
                     );
-                    String line2 = String.format(
-                            "§b%s §7(ID: %d)%s",
-                            blockName,
-                            blockId,
-                            propsSuffix
-                    );
-                    message = Component.literal(line1 + "\n" + line2);
                 } else {
-                    String line1 = String.format(
-                            "§6[QVE] %s §8| §7Miss/Air §8(§7>%,.0fm§8)",
+                    abMessage = String.format(
+                            "§6[QVE] §a%s §8│ §7Miss/Air §8(§7>%,.0fm§8)",
                             latencyStr,
                             maxDist
                     );
-                    String line2 = "§8Clear line of sight (no obstacles)";
-                    message = Component.literal(line1 + "\n" + line2);
                 }
+                Component actionBarComponent = Component.literal(abMessage);
 
                 if (server != null) {
                     server.execute(() -> {
                         if (ACTIVE_SESSIONS.containsKey(uuid) && !player.hasDisconnected()) {
-                            player.displayClientMessage(message, true);
+                            HudDisplayMode mode = session.getMode();
+
+                            // Dispatch payload for dedicated client HUD card
+                            if (mode == HudDisplayMode.CARD || mode == HudDisplayMode.BOTH) {
+                                PacketDistributor.sendToPlayer(player, payload);
+                            }
+
+                            // Dispatch stabilized action bar overlay
+                            if (mode == HudDisplayMode.ACTIONBAR || mode == HudDisplayMode.BOTH) {
+                                player.displayClientMessage(actionBarComponent, true);
+                            }
                         }
                     });
                 }

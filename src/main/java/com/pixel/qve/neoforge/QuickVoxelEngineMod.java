@@ -36,6 +36,14 @@ public class QuickVoxelEngineMod {
         NeoForge.EVENT_BUS.register(this);
         NeoForge.EVENT_BUS.register(com.pixel.qve.neoforge.hud.RaycastHudTracker.class);
 
+        // Register network payloads
+        modEventBus.addListener(com.pixel.qve.neoforge.network.QveNetwork::register);
+
+        // Register client HUD and key mappings if on physical client
+        if (net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
+            com.pixel.qve.neoforge.client.QveClientSetup.init(modEventBus);
+        }
+
         // Hook asynchronous warmup on mod loading complete
         modEventBus.addListener(this::onLoadComplete);
     }
