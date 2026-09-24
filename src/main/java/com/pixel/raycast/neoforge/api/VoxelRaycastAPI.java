@@ -130,9 +130,13 @@ public final class VoxelRaycastAPI {
             return BlockHitResult.miss(to, Direction.UP, BlockPos.containing(to));
         }
 
+        Direction hitDir = (scratch.face != VoxelFace.NONE)
+            ? toDirection(scratch.face)
+            : Direction.getNearest(-dx, -dy, -dz);
+
         return new BlockHitResult(
             new Vec3(scratch.hitX, scratch.hitY, scratch.hitZ),
-            toDirection(scratch.face),
+            hitDir,
             new BlockPos(scratch.blockX, scratch.blockY, scratch.blockZ),
             false
         );

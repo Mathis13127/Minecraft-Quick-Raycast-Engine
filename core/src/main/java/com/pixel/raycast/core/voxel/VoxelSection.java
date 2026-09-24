@@ -175,6 +175,30 @@ public final class VoxelSection {
     }
 
     /**
+     * Bulk populates this section with precomputed bitmask, block IDs, and solid count.
+     *
+     * @param mask       Occupancy bitmask (64 longs)
+     * @param blockIds   Block identifier array (4096 shorts)
+     * @param solidCount Number of solid voxels
+     */
+    public void populate(long[] mask, short[] blockIds, int solidCount) {
+        System.arraycopy(mask, 0, this.bitmask, 0, MASK_WORDS);
+        System.arraycopy(blockIds, 0, this.blockIds, 0, VOXEL_COUNT);
+        this.solidCount = solidCount;
+    }
+
+    /**
+     * Recalculates solidCount by counting set bits in the occupancy bitmask.
+     */
+    public void recalculateSolidCount() {
+        int count = 0;
+        for (long word : bitmask) {
+            count += Long.bitCount(word);
+        }
+        this.solidCount = count;
+    }
+
+    /**
      * Creates an independent deep copy of this VoxelSection.
      *
      * @return Cloned VoxelSection

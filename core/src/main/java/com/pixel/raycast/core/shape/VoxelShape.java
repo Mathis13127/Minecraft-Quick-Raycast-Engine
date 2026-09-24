@@ -157,6 +157,7 @@ public final class VoxelShape {
                              SubBox.SubBoxHit hitOut) {
         if (isFull) {
             hitOut.t = Math.max(0.0, tEntry);
+            hitOut.face = VoxelFace.NONE;
             return true;
         }
         if (boxes.length == 0) {

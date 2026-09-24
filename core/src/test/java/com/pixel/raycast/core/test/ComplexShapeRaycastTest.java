@@ -138,4 +138,19 @@ public class ComplexShapeRaycastTest {
         assertEquals(STAIRS_ID, result.blockId);
         assertEquals(2.0, result.distance, 1e-4);
     }
+
+    @Test
+    void testRayStartingInEmptyUpperHalfOfSlabDoesNotTriggerPointBlankHit() {
+        // Place a bottom slab at (0, 0, 0) - solid from Y 0.0 to 0.5, empty from 0.5 to 1.0
+        grid.setVoxel(0, 0, 0, true, SLAB_ID);
+        grid.setVoxel(5, 0, 0, true, WALL_ID);
+
+        // Ray starts at (0.5, 0.75, 0.5), inside the voxel coordinates (0, 0, 0), but in the AIR upper half
+        boolean hit = VoxelDDA.trace(0.5, 0.75, 0.5, 1.0, 0.0, 0.0, 20.0, grid, result);
+
+        assertTrue(hit, "Ray starting in empty upper half should not be blocked point-blank");
+        assertEquals(5, result.blockX, "Ray should hit the wall at X=5");
+        assertEquals(WALL_ID, result.blockId);
+        assertEquals(4.5, result.distance, 1e-4);
+    }
 }

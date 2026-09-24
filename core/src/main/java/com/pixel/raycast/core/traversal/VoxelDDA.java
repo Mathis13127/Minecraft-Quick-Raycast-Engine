@@ -45,7 +45,23 @@ public final class VoxelDDA {
                                 double maxDist, IVoxelGrid grid, RayHitResult result) {
         result.reset();
 
-        if (maxDist <= 0.0 || Double.isNaN(maxDist)) {
+        if (maxDist <= 0.0 || Double.isNaN(maxDist) ||
+            Double.isNaN(startX) || Double.isNaN(startY) || Double.isNaN(startZ) ||
+            Double.isNaN(dirX) || Double.isNaN(dirY) || Double.isNaN(dirZ)) {
+            return false;
+        }
+
+        double dirLenSq = dirX * dirX + dirY * dirY + dirZ * dirZ;
+        if (dirLenSq < 1e-12) {
+            int x0 = (int) Math.floor(startX);
+            int y0 = (int) Math.floor(startY);
+            int z0 = (int) Math.floor(startZ);
+            VoxelSection sec0 = grid.getSection(x0 >> 4, y0 >> 4, z0 >> 4);
+            if (sec0 != null && !sec0.isEmpty() && sec0.isSolid(x0 & 15, y0 & 15, z0 & 15)) {
+                short blockId = sec0.getBlockId(x0 & 15, y0 & 15, z0 & 15);
+                com.pixel.raycast.core.shape.SubBox.SubBoxHit subHit0 = new com.pixel.raycast.core.shape.SubBox.SubBoxHit();
+                return evaluateVoxelHit(startX, startY, startZ, 0, 0, 0, x0, y0, z0, 0.0, 0.0, VoxelFace.NONE, blockId, grid, subHit0, result);
+            }
             return false;
         }
 
@@ -80,13 +96,6 @@ public final class VoxelDDA {
         int currentSy = y >> 4;
         int currentSz = z >> 4;
         VoxelSection currentSection = grid.getSection(currentSx, currentSy, currentSz);
-
-        // Point-blank check: start position inside solid voxel
-        if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-            short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
-            result.set(true, startX, startY, startZ, x, y, z, VoxelFace.NONE, blockId, 0.0);
-            return true;
-        }
 
         // Determine step direction along each axis
         int stepX = (dirX > 0) ? 1 : ((dirX < 0) ? -1 : 0);

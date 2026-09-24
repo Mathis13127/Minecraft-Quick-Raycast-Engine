@@ -59,15 +59,17 @@ public final class Ray3f {
             this.dx = dx * invLen;
             this.dy = dy * invLen;
             this.dz = dz * invLen;
+            this.invDx = (Math.abs(this.dx) > 1e-9f) ? (1.0f / this.dx) : (this.dx >= 0 ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY);
+            this.invDy = (Math.abs(this.dy) > 1e-9f) ? (1.0f / this.dy) : (this.dy >= 0 ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY);
+            this.invDz = (Math.abs(this.dz) > 1e-9f) ? (1.0f / this.dz) : (this.dz >= 0 ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY);
         } else {
             this.dx = 0.0f;
             this.dy = 0.0f;
-            this.dz = 1.0f;
+            this.dz = 0.0f;
+            this.invDx = Float.POSITIVE_INFINITY;
+            this.invDy = Float.POSITIVE_INFINITY;
+            this.invDz = Float.POSITIVE_INFINITY;
         }
-
-        this.invDx = (Math.abs(this.dx) > 1e-9f) ? (1.0f / this.dx) : (this.dx >= 0 ? 1e9f : -1e9f);
-        this.invDy = (Math.abs(this.dy) > 1e-9f) ? (1.0f / this.dy) : (this.dy >= 0 ? 1e9f : -1e9f);
-        this.invDz = (Math.abs(this.dz) > 1e-9f) ? (1.0f / this.dz) : (this.dz >= 0 ? 1e9f : -1e9f);
 
         this.maxDistance = maxDistance;
         return this;

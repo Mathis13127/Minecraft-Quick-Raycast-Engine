@@ -254,10 +254,9 @@ public final class RaycastCommand {
         )), false);
 
         RaycastThreadPool.submit(() -> {
-            try {
-                var registry = MinecraftVoxelBridge.getBlockRegistry();
-                McaVoxelGrid mcaGrid = new McaVoxelGrid(registry);
-                McaRegionReader reader = new McaRegionReader(targetRegion, registry);
+            var registry = MinecraftVoxelBridge.getBlockRegistry();
+            try (McaVoxelGrid mcaGrid = new McaVoxelGrid(registry);
+                 McaRegionReader reader = new McaRegionReader(targetRegion, registry)) {
 
                 long tLoad0 = System.nanoTime();
                 int sectionsLoaded = mcaGrid.preloadRegion(reader);

@@ -167,11 +167,17 @@ public final class McaRegionReader implements Closeable {
 
         long filePos = (long) sectorOffset * 4096L;
         if (filePos + 5 > mmap.capacity()) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Corrupted sector offset {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                    sectorOffset, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
             return 0; // Out of bounds offset
         }
 
         int length = mmap.getInt((int) filePos);
         if (length <= 0 || (filePos + 4 + length) > mmap.capacity()) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Invalid payload length {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                    length, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
             return 0; // Invalid payload
         }
 
@@ -280,6 +286,9 @@ public final class McaRegionReader implements Closeable {
         }
 
         if (decompressedBuf.remaining() < 1) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Empty decompressed buffer in chunk ({0}, {1}) in region r.{2}.{3}.mca",
+                    localChunkX, localChunkZ, regionX, regionZ);
             return 0;
         }
 
@@ -292,6 +301,9 @@ public final class McaRegionReader implements Closeable {
         }
         int rootNameLen = decompressedBuf.getShort() & 0xFFFF;
         if (decompressedBuf.remaining() < rootNameLen) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Truncated root compound name in chunk ({0}, {1}) in region r.{2}.{3}.mca: remaining={4}, nameLen={5}",
+                    localChunkX, localChunkZ, regionX, regionZ, decompressedBuf.remaining(), rootNameLen);
             return 0;
         }
         decompressedBuf.position(decompressedBuf.position() + rootNameLen);
@@ -379,6 +391,10 @@ public final class McaRegionReader implements Closeable {
             VoxelSection section = BlockStatePaletteUnpacker.unpackDirect(paletteIds, data);
             consumer.accept(sectionY, section);
             return 1;
+        } else if (sectionY != Integer.MIN_VALUE && data != null && paletteIds == null) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Section at Y={0} has block data without palette in region r.{1}.{2}.mca",
+                    sectionY, regionX, regionZ);
         }
 
         return 0;

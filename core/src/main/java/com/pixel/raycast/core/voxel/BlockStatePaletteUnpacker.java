@@ -45,15 +45,7 @@ public final class BlockStatePaletteUnpacker {
             if (blockId != BlockIdRegistry.AIR_ID) {
                 Arrays.fill(target.getBitmask(), ~0L);
                 Arrays.fill(target.getBlockIds(), blockId);
-                // Reconstruct with solidCount = 4096
-                for (int i = 0; i < VoxelSection.VOXEL_COUNT; i++) {
-                    target.getBlockIds()[i] = blockId;
-                }
-                // Update solidCount via internal reconstruction
-                target.clear();
-                Arrays.fill(target.getBitmask(), ~0L);
-                Arrays.fill(target.getBlockIds(), blockId);
-                // Manually set voxels or recreate
+                target.recalculateSolidCount();
             }
             return;
         }
@@ -93,7 +85,7 @@ public final class BlockStatePaletteUnpacker {
             }
         }
 
-        // Set the solid count using private field via setVoxel or constructor
+        target.recalculateSolidCount();
     }
 
     /**

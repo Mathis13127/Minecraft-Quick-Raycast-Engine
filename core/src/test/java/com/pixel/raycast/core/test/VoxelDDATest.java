@@ -217,4 +217,49 @@ class VoxelDDATest {
         assertTrue(raysPerSecond >= 80_000,
             String.format("Throughput regression: expected >= 80,000 rays/s, got %,.0f rays/s", raysPerSecond));
     }
+
+    @Test
+    @DisplayName("3D DDA: NaN input validation returns false cleanly")
+    void testNaNInputsReturnFalse() {
+        TestVoxelGrid grid = new TestVoxelGrid();
+        grid.setBlock(1, 1, 1, true, (short) 1);
+        RayHitResult result = new RayHitResult();
+
+        assertFalse(VoxelDDA.trace(Double.NaN, 0, 0, 1, 0, 0, 10, grid, result));
+        assertFalse(VoxelDDA.trace(0, Double.NaN, 0, 1, 0, 0, 10, grid, result));
+        assertFalse(VoxelDDA.trace(0, 0, Double.NaN, 1, 0, 0, 10, grid, result));
+        assertFalse(VoxelDDA.trace(0, 0, 0, Double.NaN, 0, 0, 10, grid, result));
+        assertFalse(VoxelDDA.trace(0, 0, 0, 1, 0, 0, Double.NaN, grid, result));
+        assertFalse(VoxelDDA.trace(0, 0, 0, 1, 0, 0, -5.0, grid, result));
+    }
+
+    @Test
+    @DisplayName("3D DDA: Zero direction ray tests point-blank hit only")
+    void testZeroDirectionRay() {
+        TestVoxelGrid grid = new TestVoxelGrid();
+        grid.setBlock(2, 2, 2, true, (short) 55);
+        RayHitResult result = new RayHitResult();
+
+        // Inside solid block at (2.5, 2.5, 2.5) with zero direction
+        assertTrue(VoxelDDA.trace(2.5, 2.5, 2.5, 0, 0, 0, 10.0, grid, result));
+        assertEquals(2, result.blockX);
+        assertEquals(2, result.blockY);
+        assertEquals(2, result.blockZ);
+        assertEquals(55, result.blockId);
+
+        // Outside solid block at (0.5, 0.5, 0.5) with zero direction
+        assertFalse(VoxelDDA.trace(0.5, 0.5, 0.5, 0, 0, 0, 10.0, grid, result));
+    }
+
+    @Test
+    @DisplayName("Ray3f: Zero direction vector does not steer into +Z")
+    void testZeroLengthRay3f() {
+        Ray3f ray = new Ray3f(1, 2, 3, 0, 0, 0, 100);
+        assertEquals(0.0f, ray.dx);
+        assertEquals(0.0f, ray.dy);
+        assertEquals(0.0f, ray.dz);
+        assertEquals(Float.POSITIVE_INFINITY, ray.invDx);
+        assertEquals(Float.POSITIVE_INFINITY, ray.invDy);
+        assertEquals(Float.POSITIVE_INFINITY, ray.invDz);
+    }
 }

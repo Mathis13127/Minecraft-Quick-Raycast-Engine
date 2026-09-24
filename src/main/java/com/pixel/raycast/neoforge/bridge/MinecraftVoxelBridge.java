@@ -242,6 +242,9 @@ public final class MinecraftVoxelBridge {
             VoxelSection voxelSection = section.raycast$getVoxelSection();
             if (voxelSection != null) {
                 if (voxelSection == VoxelSection.EMPTY) {
+                    if (newState.isAir()) {
+                        return;
+                    }
                     voxelSection = new VoxelSection();
                     section.raycast$setVoxelSection(voxelSection);
                     VoxelChunkColumn column = section.raycast$getVoxelColumn();

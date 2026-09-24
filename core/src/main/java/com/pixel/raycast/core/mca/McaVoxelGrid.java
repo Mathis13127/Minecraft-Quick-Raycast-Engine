@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Universal voxel world provider backed by one or more Minecraft Anvil (.mca) region files.
  * Provides on-demand chunk loading and ultra-fast section lookup for 3D DDA raycasting.
  */
-public final class McaVoxelGrid implements IVoxelGrid {
+public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
 
     private static final System.Logger LOGGER = System.getLogger(McaVoxelGrid.class.getName());
 
@@ -182,7 +182,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
      */
     public int loadChunk(int chunkX, int chunkZ) throws IOException {
         long cKey = chunkKey(chunkX, chunkZ);
-        if (loadedChunks.contains(cKey)) {
+        if (!loadedChunks.add(cKey)) {
             return 0;
         }
 
@@ -190,26 +190,32 @@ public final class McaVoxelGrid implements IVoxelGrid {
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
-            loadedChunks.add(cKey);
             return 0;
         }
 
-        McaRegionReader reader = regions.get(rKey);
-        if (reader == null && regionDirectory != null) {
-            Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-            if (java.nio.file.Files.exists(mcaFile)) {
-                reader = new McaRegionReader(mcaFile, registry);
-                regions.put(rKey, reader);
-            } else {
-                missingRegions.add(rKey);
+        McaRegionReader reader = regions.computeIfAbsent(rKey, k -> {
+            if (regionDirectory != null) {
+                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+                if (java.nio.file.Files.exists(mcaFile)) {
+                    try {
+                        return new McaRegionReader(mcaFile, registry);
+                    } catch (IOException e) {
+                        LOGGER.log(System.Logger.Level.WARNING,
+                                "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
+                        missingRegions.add(k);
+                        return null;
+                    }
+                } else {
+                    missingRegions.add(k);
+                }
             }
-        }
+            return null;
+        });
+
         if (reader == null) {
-            loadedChunks.add(cKey);
             return 0;
         }
 
-        loadedChunks.add(cKey);
         int localCx = chunkX & 31;
         int localCz = chunkZ & 31;
         synchronized (reader) {
@@ -290,5 +296,20 @@ public final class McaVoxelGrid implements IVoxelGrid {
         heightmaps.clear();
         loadedChunks.clear();
         missingRegions.clear();
+    }
+
+    @Override
+    public void close() {
+        for (McaRegionReader reader : regions.values()) {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException e) {
+                    LOGGER.log(System.Logger.Level.WARNING, "Error closing region reader: {0}", e.getMessage());
+                }
+            }
+        }
+        regions.clear();
+        clearCache();
     }
 }

@@ -12,7 +12,7 @@ import java.util.Objects;
 public final class ShapeRegistry {
 
     private static final int INITIAL_CAPACITY = 256;
-    private VoxelShape[] shapes;
+    private volatile VoxelShape[] shapes;
 
     /**
      * Constructs a ShapeRegistry initialized to full cubes, with air reserved as empty.
@@ -29,7 +29,7 @@ public final class ShapeRegistry {
      * @param blockId 16-bit block ID
      * @param shape   VoxelShape collision model
      */
-    public void registerShape(short blockId, VoxelShape shape) {
+    public synchronized void registerShape(short blockId, VoxelShape shape) {
         Objects.requireNonNull(shape, "VoxelShape cannot be null");
         int index = blockId & 0xFFFF;
         ensureCapacity(index + 1);
@@ -47,8 +47,9 @@ public final class ShapeRegistry {
             return VoxelShape.EMPTY;
         }
         int index = blockId & 0xFFFF;
-        if (index < shapes.length) {
-            VoxelShape shape = shapes[index];
+        VoxelShape[] localShapes = this.shapes;
+        if (index < localShapes.length) {
+            VoxelShape shape = localShapes[index];
             return (shape != null) ? shape : VoxelShape.FULL_CUBE;
         }
         return VoxelShape.FULL_CUBE;
