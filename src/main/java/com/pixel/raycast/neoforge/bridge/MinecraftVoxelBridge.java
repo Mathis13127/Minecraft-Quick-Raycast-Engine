@@ -194,7 +194,7 @@ public final class MinecraftVoxelBridge {
      */
     public static VoxelSection compileSection(LevelChunkSection vanillaSection, VoxelChunkColumn column, int sectionY) {
         if (vanillaSection == null || vanillaSection.hasOnlyAir()) {
-            VoxelSection empty = new VoxelSection();
+            VoxelSection empty = VoxelSection.EMPTY;
             if (column != null) {
                 column.setSection(sectionY, empty);
             }

@@ -100,8 +100,69 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
     }
 
     @Override
+    public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
+        VoxelChunkColumn col = cache.getColumn(chunkX, chunkZ);
+        if (col != null) {
+            return col;
+        }
+
+        LevelChunk chunk = null;
+        ChunkAccess ca = level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+        if (ca instanceof LevelChunk lc) {
+            chunk = lc;
+        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
+            chunk = scc.getChunkNow(chunkX, chunkZ);
+        }
+
+        if (chunk != null) {
+            return cache.getOrCreateColumn(chunkX, chunkZ);
+        }
+
+        return null;
+    }
+
+    @Override
     public Heightmap2D getHeightmap(int chunkX, int chunkZ) {
-        return cache.getHeightmap(chunkX, chunkZ);
+        Heightmap2D hm = cache.getHeightmap(chunkX, chunkZ);
+        if (hm != null && hm.getHighestY() != Heightmap2D.VOID_Y) {
+            return hm;
+        }
+
+        LevelChunk chunk = null;
+        ChunkAccess ca = level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+        if (ca instanceof LevelChunk lc) {
+            chunk = lc;
+        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
+            chunk = scc.getChunkNow(chunkX, chunkZ);
+        }
+
+        if (chunk != null) {
+            VoxelChunkColumn col = cache.getOrCreateColumn(chunkX, chunkZ);
+            Heightmap2D colHm = col.getHeightmap();
+            if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
+                LevelChunkSection[] sections = chunk.getSections();
+                for (int i = sections.length - 1; i >= 0; i--) {
+                    LevelChunkSection s = sections[i];
+                    if (s != null && !s.hasOnlyAir()) {
+                        int secY = chunk.getSectionYFromSectionIndex(i);
+                        short topY = (short) ((secY << 4) + 15);
+                        colHm.recomputeHighest();
+                        if (topY > colHm.getHighestY()) {
+                            colHm.setHeight(0, 0, topY);
+                        }
+                        break;
+                    }
+                }
+            }
+            return colHm;
+        }
+
+        return hm;
+    }
+
+    @Override
+    public short getLowestWorldY() {
+        return (short) level.getMinBuildHeight();
     }
 
     @Override

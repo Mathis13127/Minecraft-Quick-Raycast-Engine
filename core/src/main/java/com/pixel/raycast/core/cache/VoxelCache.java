@@ -29,6 +29,11 @@ public final class VoxelCache implements IVoxelGrid {
     private final int maxSectionY;
 
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
+    private static final Heightmap2D EMPTY_HEIGHTMAP = new Heightmap2D();
+    private static final int L1_SIZE = 1024;
+    private static final int L1_MASK = L1_SIZE - 1;
+    private final long[] l1Keys = new long[L1_SIZE];
+    private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
     private volatile short highestWorldY = Short.MIN_VALUE;
 
     /**
@@ -90,9 +95,33 @@ public final class VoxelCache implements IVoxelGrid {
     }
 
     @Override
+    public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
+        long key = chunkKey(chunkX, chunkZ);
+        int slot = (int) ((key ^ (key >>> 16) ^ (key >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == key) {
+            VoxelChunkColumn col = l1Columns[slot];
+            if (col != null && col.getChunkX() == chunkX && col.getChunkZ() == chunkZ) {
+                return col;
+            }
+        }
+
+        VoxelChunkColumn column = columns.get(key);
+        if (column != null) {
+            l1Keys[slot] = key;
+            l1Columns[slot] = column;
+            return column;
+        }
+
+        if (diskFallback != null) {
+            return diskFallback.getColumn(chunkX, chunkZ);
+        }
+
+        return null;
+    }
+
+    @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
-        long cKey = chunkKey(sectionX, sectionZ);
-        VoxelChunkColumn column = columns.get(cKey);
+        VoxelChunkColumn column = getColumn(sectionX, sectionZ);
         if (column != null) {
             VoxelSection section = column.getSection(sectionY);
             if (section != null) {
@@ -124,6 +153,10 @@ public final class VoxelCache implements IVoxelGrid {
         long cKey = chunkKey(sectionX, sectionZ);
         VoxelChunkColumn column = columns.computeIfAbsent(cKey, k -> new VoxelChunkColumn(sectionX, sectionZ, minSectionY, maxSectionY));
         column.setSection(sectionY, section);
+
+        int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+        l1Keys[slot] = cKey;
+        l1Columns[slot] = column;
 
         short colHighest = column.getHeightmap().getHighestY();
         if (colHighest > highestWorldY) {
@@ -188,28 +221,21 @@ public final class VoxelCache implements IVoxelGrid {
         return columns.computeIfAbsent(chunkKey(chunkX, chunkZ), k -> new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY));
     }
 
-    /**
-     * Retrieves the chunk column if currently cached in memory, or null otherwise.
-     *
-     * @param chunkX Chunk X coordinate
-     * @param chunkZ Chunk Z coordinate
-     * @return VoxelChunkColumn instance, or null if uncached
-     */
-    public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
-        return columns.get(chunkKey(chunkX, chunkZ));
-    }
-
     @Override
     public Heightmap2D getHeightmap(int chunkX, int chunkZ) {
-        long cKey = chunkKey(chunkX, chunkZ);
-        VoxelChunkColumn column = columns.get(cKey);
+        VoxelChunkColumn column = getColumn(chunkX, chunkZ);
         if (column != null) {
             return column.getHeightmap();
         }
         if (diskFallback != null) {
             return diskFallback.getHeightmap(chunkX, chunkZ);
         }
-        return null;
+        return EMPTY_HEIGHTMAP;
+    }
+
+    @Override
+    public short getLowestWorldY() {
+        return (short) (minSectionY << 4);
     }
 
     @Override
@@ -274,6 +300,8 @@ public final class VoxelCache implements IVoxelGrid {
      */
     public void clear() {
         columns.clear();
+        java.util.Arrays.fill(l1Keys, 0L);
+        java.util.Arrays.fill(l1Columns, null);
         highestWorldY = Short.MIN_VALUE;
     }
 }

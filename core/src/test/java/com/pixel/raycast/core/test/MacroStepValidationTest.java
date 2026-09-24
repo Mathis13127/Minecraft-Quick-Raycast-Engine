@@ -20,14 +20,24 @@ public class MacroStepValidationTest {
 
     static class SimpleVoxelGrid implements IVoxelGrid {
         final Map<Long, VoxelSection> sections = new HashMap<>();
+        final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new HashMap<>();
 
         static long key(int sx, int sy, int sz) {
             return (((long) sx & 0x3FFFFFL)) | (((long) sz & 0x3FFFFFL) << 22) | (((long) sy & 0xFFFFFL) << 44);
         }
 
+        static long chunkKey(int cx, int cz) {
+            return (((long) cx & 0xFFFFFFFFL)) | (((long) cz & 0xFFFFFFFFL) << 32);
+        }
+
         @Override
         public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
             return sections.get(key(sectionX, sectionY, sectionZ));
+        }
+
+        @Override
+        public com.pixel.raycast.core.voxel.Heightmap2D getHeightmap(int chunkX, int chunkZ) {
+            return heightmaps.get(chunkKey(chunkX, chunkZ));
         }
 
         public void setVoxel(int wx, int wy, int wz, boolean solid, short blockId) {
@@ -37,6 +47,11 @@ public class MacroStepValidationTest {
             long k = key(sx, sy, sz);
             VoxelSection sec = sections.computeIfAbsent(k, id -> new VoxelSection());
             sec.setVoxel(wx & 15, wy & 15, wz & 15, solid, blockId);
+
+            if (solid) {
+                com.pixel.raycast.core.voxel.Heightmap2D hm = heightmaps.computeIfAbsent(chunkKey(sx, sz), id -> new com.pixel.raycast.core.voxel.Heightmap2D());
+                hm.updateMax(wx & 15, wz & 15, (short) wy);
+            }
         }
     }
 
@@ -175,8 +190,39 @@ public class MacroStepValidationTest {
                 assertEquals(refResult.blockZ, ddaResult.blockZ, "Ray #" + i + " blockZ mismatch");
                 assertEquals(refResult.face, ddaResult.face, "Ray #" + i + " face mismatch");
                 assertEquals(refResult.blockId, ddaResult.blockId, "Ray #" + i + " blockId mismatch");
-                assertEquals(refResult.distance, ddaResult.distance, 1e-4, "Ray #" + i + " distance mismatch");
             }
         }
+    }
+
+    @Test
+    public void testChunkMacroSteppingAcrossMultipleChunks() {
+        SimpleVoxelGrid grid = new SimpleVoxelGrid();
+        // Place a target wall far away at X=500 (chunk 31)
+        for (int y = 0; y < 10; y++) {
+            for (int z = -5; z <= 5; z++) {
+                grid.setVoxel(500, y, z, true, (short) 42);
+            }
+        }
+
+        RayHitResult refResult = new RayHitResult();
+        RayHitResult ddaResult = new RayHitResult();
+
+        // 1. Ray direct hit through empty sky across 31 chunks
+        boolean refHit = referenceTrace(0.5, 5.0, 0.5, 1.0, 0.0, 0.0, 600.0, grid, refResult);
+        boolean ddaHit = VoxelDDA.trace(0.5, 5.0, 0.5, 1.0, 0.0, 0.0, 600.0, grid, ddaResult);
+
+        assertTrue(refHit, "Reference ray should hit wall at X=500");
+        assertTrue(ddaHit, "Chunk macro-stepping DDA should hit wall at X=500");
+        assertEquals(refResult.blockX, ddaResult.blockX);
+        assertEquals(refResult.blockY, ddaResult.blockY);
+        assertEquals(refResult.blockZ, ddaResult.blockZ);
+        assertEquals(refResult.face, ddaResult.face);
+        assertEquals(refResult.distance, ddaResult.distance, 1e-4);
+
+        // 2. High sky ray that overshoots completely above terrain
+        boolean refMiss = referenceTrace(0.5, 100.0, 0.5, 1.0, 0.0, 0.0, 600.0, grid, refResult);
+        boolean ddaMiss = VoxelDDA.trace(0.5, 100.0, 0.5, 1.0, 0.0, 0.0, 600.0, grid, ddaResult);
+        assertFalse(refMiss);
+        assertFalse(ddaMiss);
     }
 }

@@ -20,6 +20,10 @@ public final class McaVoxelGrid implements IVoxelGrid {
 
     private final BlockIdRegistry registry;
     private final Map<Long, VoxelSection> sectionCache = new ConcurrentHashMap<>();
+    private static final int L1_SIZE = 2048;
+    private static final int L1_MASK = L1_SIZE - 1;
+    private final long[] l1SectionKeys = new long[L1_SIZE];
+    private final VoxelSection[] l1Sections = new VoxelSection[L1_SIZE];
     private final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new ConcurrentHashMap<>();
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
@@ -217,8 +221,18 @@ public final class McaVoxelGrid implements IVoxelGrid {
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
         long key = sectionKey(sectionX, sectionY, sectionZ);
+        int slot = (int) ((key ^ (key >>> 22) ^ (key >>> 44)) & L1_MASK);
+        if (l1SectionKeys[slot] == key) {
+            VoxelSection s = l1Sections[slot];
+            if (s != null) {
+                return s;
+            }
+        }
+
         VoxelSection cached = sectionCache.get(key);
         if (cached != null) {
+            l1SectionKeys[slot] = key;
+            l1Sections[slot] = cached;
             return cached;
         }
 
@@ -239,7 +253,12 @@ public final class McaVoxelGrid implements IVoxelGrid {
         if (regions.containsKey(rKey) || regionDirectory != null) {
             try {
                 loadChunk(sectionX, sectionZ);
-                return sectionCache.get(key);
+                VoxelSection loaded = sectionCache.get(key);
+                if (loaded != null) {
+                    l1SectionKeys[slot] = key;
+                    l1Sections[slot] = loaded;
+                }
+                return loaded;
             } catch (Exception e) {
                 LOGGER.log(System.Logger.Level.WARNING,
                         "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
@@ -249,6 +268,11 @@ public final class McaVoxelGrid implements IVoxelGrid {
         }
 
         return null;
+    }
+
+    @Override
+    public short getLowestWorldY() {
+        return -64;
     }
 
     /**
@@ -268,5 +292,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
         heightmaps.clear();
         loadedChunks.clear();
         missingRegions.clear();
+        java.util.Arrays.fill(l1SectionKeys, 0L);
+        java.util.Arrays.fill(l1Sections, null);
     }
 }

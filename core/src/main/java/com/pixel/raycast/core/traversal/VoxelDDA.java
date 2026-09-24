@@ -107,6 +107,12 @@ public final class VoxelDDA {
         VoxelFace lastFace = VoxelFace.NONE;
         com.pixel.raycast.core.shape.SubBox.SubBoxHit subHit = new com.pixel.raycast.core.shape.SubBox.SubBoxHit();
 
+        // Chunk tracking registers across horizontal traversal
+        int currentChunkX = currentSx;
+        int currentChunkZ = currentSz;
+        com.pixel.raycast.core.voxel.Heightmap2D currentHm = grid.getHeightmap(currentChunkX, currentChunkZ);
+        short lowestWorldY = grid.getLowestWorldY();
+
         // Point-blank check: start position inside voxel with shape precision
         if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
             short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
@@ -117,8 +123,83 @@ public final class VoxelDDA {
         }
 
         while (t <= maxDist) {
-            // Macro-skip: jump across empty 16x16x16 sections in 1 step
+            // Macro-skip: jump across empty space in 1 step
             if (currentSection == null || currentSection.isEmpty()) {
+                // Keep chunk heightmap synchronized with current horizontal position
+                if (currentSx != currentChunkX || currentSz != currentChunkZ) {
+                    currentChunkX = currentSx;
+                    currentChunkZ = currentSz;
+                    currentHm = grid.getHeightmap(currentChunkX, currentChunkZ);
+                }
+
+                // 1. Chunk-Level Macro-Skip: bypass entire 16x16 chunk column horizontally if above terrain
+                if (currentHm != null) {
+                    short highestY = currentHm.getHighestY();
+                    int chunkMinX = currentChunkX << 4;
+                    int chunkMinZ = currentChunkZ << 4;
+
+                    double exitChunkTx = (stepX > 0) ? ((chunkMinX + 16.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - chunkMinX) * tDeltaX) : Double.MAX_VALUE);
+                    double exitChunkTz = (stepZ > 0) ? ((chunkMinZ + 16.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - chunkMinZ) * tDeltaZ) : Double.MAX_VALUE);
+                    double exitChunkT = Math.min(exitChunkTx, exitChunkTz);
+
+                    if (exitChunkT > t) {
+                        double tEnd = Math.min(exitChunkT, maxDist);
+                        double yCurrent = startY + t * dirY;
+                        double yEnd = startY + tEnd * dirY;
+                        double minYInChunk = Math.min(yCurrent, yEnd);
+
+                        if (highestY == com.pixel.raycast.core.voxel.Heightmap2D.VOID_Y || minYInChunk >= (highestY + 1.0)) {
+                            if (exitChunkT > maxDist) {
+                                break;
+                            }
+
+                            if (Math.abs(exitChunkTx - exitChunkTz) < 1e-9) {
+                                x = (stepX > 0) ? (chunkMinX + 16) : (chunkMinX - 1);
+                                z = (stepZ > 0) ? (chunkMinZ + 16) : (chunkMinZ - 1);
+                                y = (int) Math.floor(startY + exitChunkT * dirY);
+                                t = exitChunkTx;
+                                lastFace = (stepX > 0) ? VoxelFace.WEST : VoxelFace.EAST;
+                            } else if (exitChunkT == exitChunkTx) {
+                                x = (stepX > 0) ? (chunkMinX + 16) : (chunkMinX - 1);
+                                y = (int) Math.floor(startY + exitChunkT * dirY);
+                                z = Math.max(chunkMinZ, Math.min(chunkMinZ + 15, (int) Math.floor(startZ + exitChunkT * dirZ)));
+                                t = exitChunkTx;
+                                lastFace = (stepX > 0) ? VoxelFace.WEST : VoxelFace.EAST;
+                            } else {
+                                x = Math.max(chunkMinX, Math.min(chunkMinX + 15, (int) Math.floor(startX + exitChunkT * dirX)));
+                                y = (int) Math.floor(startY + exitChunkT * dirY);
+                                z = (stepZ > 0) ? (chunkMinZ + 16) : (chunkMinZ - 1);
+                                t = exitChunkTz;
+                                lastFace = (stepZ > 0) ? VoxelFace.NORTH : VoxelFace.SOUTH;
+                            }
+
+                            tMaxX = (stepX > 0) ? ((x + 1.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - x) * tDeltaX) : Double.MAX_VALUE);
+                            tMaxY = (stepY > 0) ? ((y + 1.0 - startY) * tDeltaY) : ((stepY < 0) ? ((startY - y) * tDeltaY) : Double.MAX_VALUE);
+                            tMaxZ = (stepZ > 0) ? ((z + 1.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - z) * tDeltaZ) : Double.MAX_VALUE);
+
+                            currentSx = x >> 4;
+                            currentSy = y >> 4;
+                            currentSz = z >> 4;
+                            currentSection = grid.getSection(currentSx, currentSy, currentSz);
+
+                            if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
+                                short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
+                                double tExitLanding = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
+                                if (evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tExitLanding, lastFace, blockId, grid, subHit, result)) {
+                                    return true;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                } else if (lowestWorldY > Short.MIN_VALUE) {
+                    double yCurrent = startY + t * dirY;
+                    if (yCurrent < lowestWorldY && dirY <= 0) {
+                        break;
+                    }
+                }
+
+                // 2. Section-Level Macro-Skip: jump across empty 16x16x16 sections in 1 step
                 int minX = currentSx << 4;
                 int minY = currentSy << 4;
                 int minZ = currentSz << 4;

@@ -76,6 +76,26 @@ public interface IVoxelGrid {
     }
 
     /**
+     * Retrieves the optional chunk column containing vertical sections and heightmap.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return VoxelChunkColumn instance, or null if uncomputed or unsupported
+     */
+    default com.pixel.raycast.core.cache.VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
+        return null;
+    }
+
+    /**
+     * Retrieves the minimum solid Y coordinate across the world/grid (e.g. -64 in modern vanilla Minecraft).
+     *
+     * @return Minimum world Y altitude containing solid blocks
+     */
+    default short getLowestWorldY() {
+        return (short) -64;
+    }
+
+    /**
      * Retrieves the optional shape registry for sub-voxel collision shapes.
      *
      * @return ShapeRegistry instance, or null if only full cubes are supported
