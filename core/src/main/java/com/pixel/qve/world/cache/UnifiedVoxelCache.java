@@ -348,4 +348,9 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
         java.util.Arrays.fill(l1Columns, null);
         highestWorldY = Short.MIN_VALUE;
     }
+
+    @Override
+    public com.pixel.qve.api.nbt.INbtService getNbtService() {
+        return (diskFallback != null) ? diskFallback.getNbtService() : null;
+    }
 }

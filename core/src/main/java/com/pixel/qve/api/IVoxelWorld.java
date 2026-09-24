@@ -177,4 +177,22 @@ public interface IVoxelWorld {
     default int getWorldMaxZ() {
         return Integer.MAX_VALUE;
     }
+
+    /**
+     * Retrieves the optional on-demand NBT service for this voxel world.
+     *
+     * @return INbtService instance, or null if NBT queries are unsupported
+     */
+    default com.pixel.qve.api.nbt.INbtService getNbtService() {
+        return null;
+    }
+
+    /**
+     * Retrieves the high-throughput raycast service for batch queries.
+     *
+     * @return IRaycastService instance
+     */
+    default com.pixel.qve.api.raycast.IRaycastService getRaycastService() {
+        return com.pixel.qve.raycast.VoxelRaycastBatch.INSTANCE;
+    }
 }

@@ -2,6 +2,10 @@ package com.pixel.qve.mca;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Ultra-fast zero-allocation streaming NBT parser.
@@ -271,5 +275,76 @@ public final class FastNbtReader {
             }
             default -> throw new IllegalArgumentException("Unknown NBT tag type: " + tagType);
         }
+    }
+
+    /**
+     * Parses an NBT TAG_Compound into a standard Map representation.
+     *
+     * @param buf Byte buffer positioned at the start of a compound's payload (after name)
+     * @return Map of tag names to values
+     */
+    public static Map<String, Object> parseCompound(ByteBuffer buf) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        while (buf.hasRemaining()) {
+            byte childType = buf.get();
+            if (childType == TAG_END) break;
+
+            int nameLen = buf.getShort() & 0xFFFF;
+            int namePos = buf.position();
+            buf.position(namePos + nameLen);
+            String name = decodeStringDirect(buf, namePos, nameLen);
+
+            Object value = parseTagValue(buf, childType);
+            map.put(name, value);
+        }
+        return map;
+    }
+
+    /**
+     * Parses the payload of an arbitrary NBT tag into a corresponding Java object.
+     *
+     * @param buf     Byte buffer positioned at tag payload
+     * @param tagType NBT tag type
+     * @return Java object representation
+     */
+    public static Object parseTagValue(ByteBuffer buf, byte tagType) {
+        return switch (tagType) {
+            case TAG_BYTE -> buf.get();
+            case TAG_SHORT -> buf.getShort();
+            case TAG_INT -> buf.getInt();
+            case TAG_LONG -> buf.getLong();
+            case TAG_FLOAT -> buf.getFloat();
+            case TAG_DOUBLE -> buf.getDouble();
+            case TAG_BYTE_ARRAY -> {
+                int len = buf.getInt();
+                byte[] arr = new byte[len];
+                buf.get(arr);
+                yield arr;
+            }
+            case TAG_STRING -> {
+                int len = buf.getShort() & 0xFFFF;
+                int pos = buf.position();
+                buf.position(pos + len);
+                yield decodeStringDirect(buf, pos, len);
+            }
+            case TAG_LIST -> {
+                byte elemType = buf.get();
+                int count = buf.getInt();
+                List<Object> list = new ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    list.add(parseTagValue(buf, elemType));
+                }
+                yield list;
+            }
+            case TAG_COMPOUND -> parseCompound(buf);
+            case TAG_INT_ARRAY -> {
+                int len = buf.getInt();
+                int[] arr = new int[len];
+                for (int i = 0; i < len; i++) arr[i] = buf.getInt();
+                yield arr;
+            }
+            case TAG_LONG_ARRAY -> readLongArray(buf);
+            default -> throw new IllegalArgumentException("Unknown NBT tag type: " + tagType);
+        };
     }
 }

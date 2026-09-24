@@ -32,16 +32,27 @@ public final class BlockIdRegistry {
     private final int[] byteHashKeys = new int[BYTE_HASH_TABLE_SIZE];
     private final short[] byteHashValues = new short[BYTE_HASH_TABLE_SIZE];
     private final long[] byteHashOccupied = new long[BYTE_HASH_TABLE_SIZE / 64];
+    private final BlockStateDictionary stateDictionary;
 
     /**
      * Constructs a BlockIdRegistry with air pre-registered at ID 0.
      */
     public BlockIdRegistry() {
+        this.stateDictionary = new BlockStateDictionary(this);
         // Reserve index 0 for air
         nameToId.put(AIR_NAME, AIR_ID);
         nameToId.put("minecraft:cave_air", AIR_ID);
         nameToId.put("minecraft:void_air", AIR_ID);
         idToName.add(AIR_NAME);
+    }
+
+    /**
+     * Retrieves the backing BlockStateDictionary for dynamic property sets.
+     *
+     * @return BlockStateDictionary instance
+     */
+    public BlockStateDictionary getStateDictionary() {
+        return stateDictionary;
     }
 
     /**

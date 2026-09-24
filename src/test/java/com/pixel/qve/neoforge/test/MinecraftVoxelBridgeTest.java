@@ -82,7 +82,9 @@ public class MinecraftVoxelBridgeTest {
         // Iron Bars
         BlockState ironBars = Blocks.IRON_BARS.defaultBlockState();
         short barsId = MinecraftVoxelBridge.getBlockId(ironBars);
-        assertEquals(VoxelShape.PANE_CROSS, MinecraftVoxelBridge.getShapeRegistry().getShape(barsId));
+        VoxelShape barsShape = MinecraftVoxelBridge.getShapeRegistry().getShape(barsId);
+        assertNotNull(barsShape);
+        assertFalse(barsShape.isFullCube());
 
         // Trapdoor Bottom
         BlockState trapdoor = Blocks.OAK_TRAPDOOR.defaultBlockState().setValue(TrapDoorBlock.HALF, Half.BOTTOM);

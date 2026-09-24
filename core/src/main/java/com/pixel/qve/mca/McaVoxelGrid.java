@@ -4,6 +4,7 @@ import com.pixel.qve.api.IVoxelGrid;
 import com.pixel.qve.state.ShapeRegistry;
 
 
+import com.pixel.qve.api.nbt.INbtService;
 import com.pixel.qve.api.IVoxelWorld;
 import com.pixel.qve.world.VoxelChunkColumn;
 import com.pixel.qve.state.BlockIdRegistry;
@@ -26,6 +27,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private static final System.Logger LOGGER = System.getLogger(McaVoxelGrid.class.getName());
 
     private final BlockIdRegistry registry;
+    private final OnDemandNbtFetcher nbtFetcher;
     private final Map<Long, VoxelChunkColumn> columnCache = new ConcurrentHashMap<>();
     private static final int L1_SIZE = 1024;
     private static final int L1_MASK = L1_SIZE - 1;
@@ -97,6 +99,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         for (int i = 0; i < this.chunkLocks.length; i++) {
             this.chunkLocks[i] = new Object();
         }
+        this.nbtFetcher = new OnDemandNbtFetcher(this::getOrOpenRegion);
         scanRegionDirectoryBounds();
     }
 
@@ -393,25 +396,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 return 0;
             }
 
-            McaRegionReader reader = regions.computeIfAbsent(rKey, k -> {
-                if (regionDirectory != null) {
-                    Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-                    if (java.nio.file.Files.exists(mcaFile)) {
-                        try {
-                            return new McaRegionReader(mcaFile, registry, shapeRegistry);
-                        } catch (IOException e) {
-                            LOGGER.log(System.Logger.Level.WARNING,
-                                    "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
-                            missingRegions.add(k);
-                            return null;
-                        }
-                    } else {
-                        missingRegions.add(k);
-                    }
-                }
-                return null;
-            });
-
+            McaRegionReader reader = getOrOpenRegion(rx, rz);
             if (reader == null) {
                 loadedChunks.add(cKey);
                 return 0;
@@ -480,6 +465,44 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         Arrays.fill(l1Columns, null);
         loadedChunks.clear();
         missingRegions.clear();
+    }
+
+    /**
+     * Resolves an open McaRegionReader for the given region coordinates, opening it on demand if necessary.
+     *
+     * @param rx Region X coordinate
+     * @param rz Region Z coordinate
+     * @return McaRegionReader, or null if region file is absent
+     */
+    public McaRegionReader getOrOpenRegion(int rx, int rz) {
+        long rKey = regionKey(rx, rz);
+        if (missingRegions.contains(rKey)) {
+            return null;
+        }
+
+        return regions.computeIfAbsent(rKey, k -> {
+            if (regionDirectory != null) {
+                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+                if (java.nio.file.Files.exists(mcaFile)) {
+                    try {
+                        return new McaRegionReader(mcaFile, registry, shapeRegistry);
+                    } catch (IOException e) {
+                        LOGGER.log(System.Logger.Level.WARNING,
+                                "Failed to open MCA region file {0}: {1}", mcaFile, e.getMessage());
+                        missingRegions.add(k);
+                        return null;
+                    }
+                } else {
+                    missingRegions.add(k);
+                }
+            }
+            return null;
+        });
+    }
+
+    @Override
+    public INbtService getNbtService() {
+        return nbtFetcher;
     }
 
     @Override

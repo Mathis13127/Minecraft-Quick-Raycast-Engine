@@ -139,48 +139,105 @@ public final class MinecraftVoxelBridge {
         return id;
     }
 
+    static {
+        BLOCK_REGISTRY.getStateDictionary().setRegistrationListener(MinecraftVoxelBridge::onStateDiscovered);
+    }
+
+    private static void onStateDiscovered(short blockId, String canonicalState) {
+        if (canonicalState == null || canonicalState.isEmpty() || canonicalState.equals(BlockIdRegistry.AIR_NAME)) {
+            return;
+        }
+        try {
+            BlockState state = parseBlockStateString(canonicalState);
+            if (state != null) {
+                VoxelShape shape = resolveShapeForState(state, state.getBlock());
+                if (shape != VoxelShape.FULL_CUBE) {
+                    SHAPE_REGISTRY.registerShape(blockId, shape);
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.debug("Could not resolve dynamic shape for state {}: {}", canonicalState, t.getMessage());
+        }
+    }
+
+    private static BlockState parseBlockStateString(String str) {
+        int bracketIndex = str.indexOf('[');
+        String name = bracketIndex >= 0 ? str.substring(0, bracketIndex) : str;
+        net.minecraft.resources.ResourceLocation rl = net.minecraft.resources.ResourceLocation.tryParse(name);
+        if (rl == null || !BuiltInRegistries.BLOCK.containsKey(rl)) {
+            return null;
+        }
+        Block block = BuiltInRegistries.BLOCK.get(rl);
+        BlockState state = block.defaultBlockState();
+
+        if (bracketIndex >= 0 && str.endsWith("]")) {
+            String propsStr = str.substring(bracketIndex + 1, str.length() - 1);
+            String[] pairs = propsStr.split(",");
+            for (String pair : pairs) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    String k = pair.substring(0, eq).trim();
+                    String v = pair.substring(eq + 1).trim();
+                    net.minecraft.world.level.block.state.properties.Property<?> prop =
+                            block.getStateDefinition().getProperty(k);
+                    if (prop != null) {
+                        state = applyProperty(state, prop, v);
+                    }
+                }
+            }
+        }
+        return state;
+    }
+
+    private static <T extends Comparable<T>> BlockState applyProperty(
+            BlockState state, net.minecraft.world.level.block.state.properties.Property<T> prop, String valStr) {
+        java.util.Optional<T> parsed = prop.getValue(valStr);
+        return parsed.map(t -> state.setValue(prop, t)).orElse(state);
+    }
+
     private static VoxelShape resolveShapeForState(BlockState state, Block block) {
-        if (block instanceof SlabBlock && state.hasProperty(SlabBlock.TYPE)) {
-            SlabType type = state.getValue(SlabBlock.TYPE);
-            if (type == SlabType.BOTTOM) {
-                return VoxelShape.SLAB_BOTTOM;
-            } else if (type == SlabType.TOP) {
-                return VoxelShape.SLAB_TOP;
-            } else {
-                return VoxelShape.FULL_CUBE;
+        if (state == null || state.isAir()) {
+            return VoxelShape.EMPTY;
+        }
+
+        try {
+            net.minecraft.world.phys.shapes.VoxelShape mcShape =
+                    state.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, net.minecraft.core.BlockPos.ZERO);
+
+            if (mcShape.isEmpty()) {
+                return VoxelShape.EMPTY;
             }
-        }
 
-        if (block instanceof StairBlock && state.hasProperty(StairBlock.FACING) && state.hasProperty(StairBlock.HALF)) {
-            Direction facing = state.getValue(StairBlock.FACING);
-            Half half = state.getValue(StairBlock.HALF);
-            if (half == Half.BOTTOM) {
-                return switch (facing) {
-                    case NORTH -> VoxelShape.STAIRS_NORTH_BOTTOM;
-                    case SOUTH -> VoxelShape.STAIRS_SOUTH_BOTTOM;
-                    case WEST -> VoxelShape.STAIRS_WEST_BOTTOM;
-                    default -> VoxelShape.STAIRS_EAST_BOTTOM;
-                };
-            } else {
-                return switch (facing) {
-                    case NORTH -> VoxelShape.STAIRS_NORTH_TOP;
-                    case SOUTH -> VoxelShape.STAIRS_SOUTH_TOP;
-                    case WEST -> VoxelShape.STAIRS_WEST_TOP;
-                    default -> VoxelShape.STAIRS_EAST_TOP;
-                };
+            java.util.List<net.minecraft.world.phys.AABB> aabbs = mcShape.toAabbs();
+            if (aabbs.isEmpty()) {
+                return VoxelShape.EMPTY;
             }
-        }
 
-        if (block instanceof IronBarsBlock) {
-            return VoxelShape.PANE_CROSS;
-        }
+            if (aabbs.size() == 1) {
+                net.minecraft.world.phys.AABB b = aabbs.get(0);
+                if (b.minX <= 0.001 && b.minY <= 0.001 && b.minZ <= 0.001
+                        && b.maxX >= 0.999 && b.maxY >= 0.999 && b.maxZ >= 0.999) {
+                    return VoxelShape.FULL_CUBE;
+                }
+            }
 
-        if (block instanceof TrapDoorBlock && state.hasProperty(TrapDoorBlock.HALF)) {
-            Half half = state.getValue(TrapDoorBlock.HALF);
-            return half == Half.BOTTOM ? VoxelShape.TRAPDOOR_BOTTOM : VoxelShape.TRAPDOOR_TOP;
+            com.pixel.qve.state.SubBox[] boxes = new com.pixel.qve.state.SubBox[aabbs.size()];
+            for (int i = 0; i < aabbs.size(); i++) {
+                net.minecraft.world.phys.AABB b = aabbs.get(i);
+                boxes[i] = new com.pixel.qve.state.SubBox(
+                        (float) Math.max(0.0, Math.min(1.0, b.minX)),
+                        (float) Math.max(0.0, Math.min(1.0, b.minY)),
+                        (float) Math.max(0.0, Math.min(1.0, b.minZ)),
+                        (float) Math.max(0.0, Math.min(1.0, b.maxX)),
+                        (float) Math.max(0.0, Math.min(1.0, b.maxY)),
+                        (float) Math.max(0.0, Math.min(1.0, b.maxZ))
+                );
+            }
+            return new VoxelShape(boxes);
+        } catch (Throwable t) {
+            LOGGER.warn("Failed to dynamically compute collision shape for state {}: {}", state, t.getMessage());
+            return VoxelShape.FULL_CUBE;
         }
-
-        return VoxelShape.FULL_CUBE;
     }
 
     /**

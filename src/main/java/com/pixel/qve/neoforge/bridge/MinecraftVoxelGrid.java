@@ -338,4 +338,81 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
     public ShapeRegistry getShapeRegistry() {
         return cache.getShapeRegistry();
     }
+
+    @Override
+    public com.pixel.qve.api.nbt.INbtService getNbtService() {
+        return new com.pixel.qve.api.nbt.INbtService() {
+            @Override
+            public java.nio.ByteBuffer getBlockEntityRawNbt(int worldX, int worldY, int worldZ) {
+                int chunkX = worldX >> 4;
+                int chunkZ = worldZ >> 4;
+                LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
+                if (chunk != null) {
+                    net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(worldX, worldY, worldZ);
+                    net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                    if (be != null) {
+                        net.minecraft.nbt.CompoundTag tag = be.saveWithFullMetadata(level.registryAccess());
+                        try {
+                            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                            net.minecraft.nbt.NbtIo.write(tag, new java.io.DataOutputStream(baos));
+                            return java.nio.ByteBuffer.wrap(baos.toByteArray());
+                        } catch (java.io.IOException e) {
+                            return null;
+                        }
+                    }
+                    return null;
+                }
+
+                IVoxelWorld disk = cache.getDiskFallback();
+                if (disk != null && disk.getNbtService() != null) {
+                    return disk.getNbtService().getBlockEntityRawNbt(worldX, worldY, worldZ);
+                }
+                return null;
+            }
+
+            @Override
+            public java.util.Map<String, Object> getBlockEntityData(int worldX, int worldY, int worldZ) {
+                java.nio.ByteBuffer raw = getBlockEntityRawNbt(worldX, worldY, worldZ);
+                if (raw != null) {
+                    return com.pixel.qve.mca.FastNbtReader.parseCompound(raw);
+                }
+                return null;
+            }
+        };
+    }
+
+    /**
+     * Resolves the Minecraft CompoundTag for a block entity at the given BlockPos.
+     * Checks live RAM chunk first; if unloaded, fetches directly from Anvil MCA on disk.
+     *
+     * @param pos Block position
+     * @return CompoundTag, or null if absent or unloaded
+     */
+    public net.minecraft.nbt.CompoundTag getBlockEntityCompoundTag(net.minecraft.core.BlockPos pos) {
+        int chunkX = pos.getX() >> 4;
+        int chunkZ = pos.getZ() >> 4;
+        LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
+        if (chunk != null) {
+            net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+            if (be != null) {
+                return be.saveWithFullMetadata(level.registryAccess());
+            }
+            return null;
+        }
+
+        IVoxelWorld disk = cache.getDiskFallback();
+        if (disk != null && disk.getNbtService() != null) {
+            java.nio.ByteBuffer raw = disk.getNbtService().getBlockEntityRawNbt(pos.getX(), pos.getY(), pos.getZ());
+            if (raw != null) {
+                try {
+                    byte[] bytes = new byte[raw.remaining()];
+                    raw.get(bytes);
+                    return net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes)));
+                } catch (java.io.IOException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
 }

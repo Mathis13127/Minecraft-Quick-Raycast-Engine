@@ -101,6 +101,22 @@ public final class ShapeRegistry {
         }
     }
 
+    /**
+     * Counts the number of custom non-full-cube shapes registered.
+     *
+     * @return Number of custom shapes
+     */
+    public int getCustomShapeCount() {
+        int count = 0;
+        VoxelShape[] local = this.shapes;
+        for (int i = 0; i < local.length; i++) {
+            if (local[i] != null && !local[i].isFullCube() && i != BlockIdRegistry.AIR_ID) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private void ensureCapacity(int minCapacity) {
         if (minCapacity > shapes.length) {
             int newCap = Math.max(shapes.length * 2, minCapacity);

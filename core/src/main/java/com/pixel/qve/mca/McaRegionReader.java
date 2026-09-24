@@ -38,6 +38,12 @@ public final class McaRegionReader implements Closeable {
     private static final byte[] PALETTE_NAME = "palette".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] DATA_NAME = "data".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] NAME_NAME = "Name".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] PROPERTIES_NAME = "Properties".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] BLOCK_ENTITIES_NAME = "block_entities".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] TILE_ENTITIES_NAME = "TileEntities".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] COORD_X_NAME = "x".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] COORD_Y_NAME = "y".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] COORD_Z_NAME = "z".getBytes(StandardCharsets.US_ASCII);
 
     private static final ThreadLocal<Inflater> INFLATER_CACHE = ThreadLocal.withInitial(() -> new Inflater(false));
     private static final ThreadLocal<ByteBuffer> DECOMPRESS_BUFFER = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(1024 * 1024));
@@ -177,135 +183,8 @@ public final class McaRegionReader implements Closeable {
             throw new IndexOutOfBoundsException("Local chunk coords must be in 0..31: (" + localChunkX + ", " + localChunkZ + ")");
         }
 
-        int sectorOffset = sectorOffsets[localChunkX + localChunkZ * 32];
-        if (sectorOffset == 0) {
-            return 0; // Chunk is not generated in this region
-        }
-
-        long filePos = (long) sectorOffset * 4096L;
-        if (filePos + 5 > mmap.capacity()) {
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "Corrupted sector offset {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
-                    sectorOffset, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
-            return 0; // Out of bounds offset
-        }
-
-        int length = mmap.getInt((int) filePos);
-        if (length <= 0 || (filePos + 4 + length) > mmap.capacity()) {
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "Invalid payload length {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
-                    length, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
-            return 0; // Invalid payload
-        }
-
-        int rawCompressionType = mmap.get((int) filePos + 4) & 0xFF;
-        boolean isExternal = (rawCompressionType & 128) != 0;
-        int compressionType = rawCompressionType & 0x7F;
-
-        ByteBuffer decompressedBuf;
-
-        if (isExternal) {
-            int worldChunkX = (regionX << 5) | localChunkX;
-            int worldChunkZ = (regionZ << 5) | localChunkZ;
-            Path parentDir = filePath.getParent();
-            Path mccPath = (parentDir != null) ? parentDir.resolve("c." + worldChunkX + "." + worldChunkZ + ".mcc") : null;
-            if (mccPath == null || !java.nio.file.Files.isRegularFile(mccPath)) {
-                LOGGER.log(System.Logger.Level.WARNING,
-                        "External chunk file for chunk ({0}, {1}) in region r.{2}.{3}.mca not found: {4}",
-                        localChunkX, localChunkZ, regionX, regionZ, mccPath);
-                return 0;
-            }
-            byte[] compressed;
-            try {
-                compressed = java.nio.file.Files.readAllBytes(mccPath);
-            } catch (IOException e) {
-                LOGGER.log(System.Logger.Level.WARNING, "Failed to read external chunk file {0}: {1}", mccPath, e.getMessage());
-                return 0;
-            }
-
-            ByteBuffer target = DECOMPRESS_BUFFER.get();
-            target.clear();
-            Inflater inflater = INFLATER_CACHE.get();
-            inflater.reset();
-            inflater.setInput(compressed, 0, compressed.length);
-            try {
-                while (!inflater.finished()) {
-                    if (!target.hasRemaining()) {
-                        ByteBuffer expanded = ByteBuffer.allocateDirect(target.capacity() * 2);
-                        target.flip();
-                        expanded.put(target);
-                        DECOMPRESS_BUFFER.set(expanded);
-                        target = expanded;
-                    }
-                    int written = inflater.inflate(target);
-                    if (written == 0 && inflater.needsInput()) break;
-                }
-                target.flip();
-                decompressedBuf = target;
-            } catch (Exception e) {
-                LOGGER.log(System.Logger.Level.WARNING, "Failed to decompress external chunk ({0}, {1}): {2}", localChunkX, localChunkZ, e.getMessage());
-                return 0;
-            }
-        } else {
-            int payloadLength = length - 1;
-            if (payloadLength <= 0) {
-                return 0;
-            }
-
-            if (compressionType == 2) { // ZLIB / DEFLATE (99.99% of chunks)
-                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
-                ByteBuffer target = DECOMPRESS_BUFFER.get();
-                target.clear();
-                Inflater inflater = INFLATER_CACHE.get();
-                inflater.reset();
-                inflater.setInput(compressedSlice);
-                try {
-                    while (!inflater.finished()) {
-                        if (!target.hasRemaining()) {
-                            ByteBuffer expanded = ByteBuffer.allocateDirect(target.capacity() * 2);
-                            target.flip();
-                            expanded.put(target);
-                            DECOMPRESS_BUFFER.set(expanded);
-                            target = expanded;
-                        }
-                        int written = inflater.inflate(target);
-                        if (written == 0 && inflater.needsInput()) break;
-                    }
-                    target.flip();
-                    decompressedBuf = target;
-                } catch (Exception e) {
-                    LOGGER.log(System.Logger.Level.WARNING,
-                            "Failed to decompress chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
-                            localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
-                    return 0;
-                }
-            } else if (compressionType == 3) { // Uncompressed
-                decompressedBuf = mmap.slice((int) filePos + 5, payloadLength);
-            } else if (compressionType == 1) { // GZIP (legacy fallback)
-                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
-                byte[] raw = new byte[payloadLength];
-                compressedSlice.get(raw);
-                try (java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw))) {
-                    byte[] decomp = gzip.readAllBytes();
-                    decompressedBuf = ByteBuffer.wrap(decomp);
-                } catch (Exception e) {
-                    LOGGER.log(System.Logger.Level.WARNING,
-                            "Failed to decompress GZIP chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
-                            localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
-                    return 0;
-                }
-            } else {
-                LOGGER.log(System.Logger.Level.WARNING,
-                        "Unsupported compression type {0} in chunk ({1}, {2}) in region r.{3}.{4}.mca, skipping",
-                        rawCompressionType, localChunkX, localChunkZ, regionX, regionZ);
-                return 0;
-            }
-        }
-
-        if (decompressedBuf.remaining() < 1) {
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "Empty decompressed buffer in chunk ({0}, {1}) in region r.{2}.{3}.mca",
-                    localChunkX, localChunkZ, regionX, regionZ);
+        ByteBuffer decompressedBuf = decompressChunk(localChunkX, localChunkZ);
+        if (decompressedBuf == null || decompressedBuf.remaining() < 1) {
             return 0;
         }
 
@@ -417,7 +296,11 @@ public final class McaRegionReader implements Closeable {
     }
 
     private short parsePaletteEntry(ByteBuffer buf) {
-        short blockId = BlockIdRegistry.AIR_ID;
+        int strPos = -1;
+        int strLen = 0;
+        int propsPos = -1;
+        int propsCompoundLen = 0;
+
         while (true) {
             byte itemType = buf.get();
             if (itemType == FastNbtReader.TAG_END) break;
@@ -427,15 +310,243 @@ public final class McaRegionReader implements Closeable {
             buf.position(namePos + nameLen);
 
             if (FastNbtReader.matches(buf, namePos, nameLen, NAME_NAME) && itemType == FastNbtReader.TAG_STRING) {
-                int strLen = buf.getShort() & 0xFFFF;
-                int strPos = buf.position();
+                strLen = buf.getShort() & 0xFFFF;
+                strPos = buf.position();
                 buf.position(strPos + strLen);
-                blockId = registry.getOrRegisterFromBytes(buf, strPos, strLen);
+            } else if (FastNbtReader.matches(buf, namePos, nameLen, PROPERTIES_NAME) && itemType == FastNbtReader.TAG_COMPOUND) {
+                propsPos = buf.position();
+                FastNbtReader.skipTagPayload(buf, itemType);
+                propsCompoundLen = buf.position() - propsPos;
             } else {
                 FastNbtReader.skipTagPayload(buf, itemType);
             }
         }
-        return blockId;
+
+        if (strPos >= 0) {
+            return registry.getStateDictionary().getOrRegisterFromBytes(buf, strPos, strLen, propsPos, propsCompoundLen);
+        }
+        return BlockIdRegistry.AIR_ID;
+    }
+
+    private ByteBuffer decompressChunk(int localChunkX, int localChunkZ) {
+        int sectorOffset = sectorOffsets[localChunkX + localChunkZ * 32];
+        if (sectorOffset == 0) {
+            return null; // Chunk is not generated in this region
+        }
+
+        long filePos = (long) sectorOffset * 4096L;
+        if (filePos + 5 > mmap.capacity()) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Corrupted sector offset {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                    sectorOffset, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
+            return null;
+        }
+
+        int length = mmap.getInt((int) filePos);
+        if (length <= 0 || (filePos + 4 + length) > mmap.capacity()) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Invalid payload length {0} in MCA file {1} for chunk ({2}, {3}): filePos={4}, capacity={5}",
+                    length, filePath, localChunkX, localChunkZ, filePos, mmap.capacity());
+            return null;
+        }
+
+        int rawCompressionType = mmap.get((int) filePos + 4) & 0xFF;
+        boolean isExternal = (rawCompressionType & 128) != 0;
+        int compressionType = rawCompressionType & 0x7F;
+
+        if (isExternal) {
+            int worldChunkX = (regionX << 5) | localChunkX;
+            int worldChunkZ = (regionZ << 5) | localChunkZ;
+            Path parentDir = filePath.getParent();
+            Path mccPath = (parentDir != null) ? parentDir.resolve("c." + worldChunkX + "." + worldChunkZ + ".mcc") : null;
+            if (mccPath == null || !java.nio.file.Files.isRegularFile(mccPath)) {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "External chunk file for chunk ({0}, {1}) in region r.{2}.{3}.mca not found: {4}",
+                        localChunkX, localChunkZ, regionX, regionZ, mccPath);
+                return null;
+            }
+            byte[] compressed;
+            try {
+                compressed = java.nio.file.Files.readAllBytes(mccPath);
+            } catch (IOException e) {
+                LOGGER.log(System.Logger.Level.WARNING, "Failed to read external chunk file {0}: {1}", mccPath, e.getMessage());
+                return null;
+            }
+
+            ByteBuffer target = DECOMPRESS_BUFFER.get();
+            target.clear();
+            Inflater inflater = INFLATER_CACHE.get();
+            inflater.reset();
+            inflater.setInput(compressed, 0, compressed.length);
+            try {
+                while (!inflater.finished()) {
+                    if (!target.hasRemaining()) {
+                        ByteBuffer expanded = ByteBuffer.allocateDirect(target.capacity() * 2);
+                        target.flip();
+                        expanded.put(target);
+                        DECOMPRESS_BUFFER.set(expanded);
+                        target = expanded;
+                    }
+                    int written = inflater.inflate(target);
+                    if (written == 0 && inflater.needsInput()) break;
+                }
+                target.flip();
+                return target;
+            } catch (Exception e) {
+                LOGGER.log(System.Logger.Level.WARNING, "Failed to decompress external chunk ({0}, {1}): {2}", localChunkX, localChunkZ, e.getMessage());
+                return null;
+            }
+        } else {
+            int payloadLength = length - 1;
+            if (payloadLength <= 0) {
+                return null;
+            }
+
+            if (compressionType == 2) { // ZLIB / DEFLATE
+                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
+                ByteBuffer target = DECOMPRESS_BUFFER.get();
+                target.clear();
+                Inflater inflater = INFLATER_CACHE.get();
+                inflater.reset();
+                inflater.setInput(compressedSlice);
+                try {
+                    while (!inflater.finished()) {
+                        if (!target.hasRemaining()) {
+                            ByteBuffer expanded = ByteBuffer.allocateDirect(target.capacity() * 2);
+                            target.flip();
+                            expanded.put(target);
+                            DECOMPRESS_BUFFER.set(expanded);
+                            target = expanded;
+                        }
+                        int written = inflater.inflate(target);
+                        if (written == 0 && inflater.needsInput()) break;
+                    }
+                    target.flip();
+                    return target;
+                } catch (Exception e) {
+                    LOGGER.log(System.Logger.Level.WARNING,
+                            "Failed to decompress chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
+                            localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
+                    return null;
+                }
+            } else if (compressionType == 3) { // Uncompressed
+                return mmap.slice((int) filePos + 5, payloadLength);
+            } else if (compressionType == 1) { // GZIP
+                ByteBuffer compressedSlice = mmap.slice((int) filePos + 5, payloadLength);
+                byte[] raw = new byte[payloadLength];
+                compressedSlice.get(raw);
+                try (java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw))) {
+                    byte[] decomp = gzip.readAllBytes();
+                    return ByteBuffer.wrap(decomp);
+                } catch (Exception e) {
+                    LOGGER.log(System.Logger.Level.WARNING,
+                            "Failed to decompress GZIP chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
+                            localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
+                    return null;
+                }
+            } else {
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "Unsupported compression type {0} in chunk ({1}, {2}) in region r.{3}.{4}.mca, skipping",
+                        rawCompressionType, localChunkX, localChunkZ, regionX, regionZ);
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Reads the isolated NBT compound for a block entity at world coordinates directly from disk.
+     * Leaves zero persistent heap memory overhead.
+     *
+     * @param localChunkX Local chunk X within this region (0..31)
+     * @param localChunkZ Local chunk Z within this region (0..31)
+     * @param worldX      World block X
+     * @param worldY      World block Y
+     * @param worldZ      World block Z
+     * @return ByteBuffer containing the isolated BlockEntity TAG_Compound payload, or null if absent
+     */
+    public ByteBuffer readBlockEntityCompound(int localChunkX, int localChunkZ, int worldX, int worldY, int worldZ) {
+        if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
+            return null;
+        }
+
+        ByteBuffer decompressedBuf = decompressChunk(localChunkX, localChunkZ);
+        if (decompressedBuf == null || decompressedBuf.remaining() < 1) {
+            return null;
+        }
+
+        byte rootType = decompressedBuf.get();
+        if (rootType != FastNbtReader.TAG_COMPOUND) {
+            return null;
+        }
+        int rootNameLen = decompressedBuf.getShort() & 0xFFFF;
+        if (decompressedBuf.remaining() < rootNameLen) {
+            return null;
+        }
+        decompressedBuf.position(decompressedBuf.position() + rootNameLen);
+
+        while (decompressedBuf.hasRemaining()) {
+            byte tagType = decompressedBuf.get();
+            if (tagType == FastNbtReader.TAG_END) break;
+
+            int nameLen = decompressedBuf.getShort() & 0xFFFF;
+            int namePos = decompressedBuf.position();
+            decompressedBuf.position(namePos + nameLen);
+
+            if ((FastNbtReader.matches(decompressedBuf, namePos, nameLen, BLOCK_ENTITIES_NAME)
+                    || FastNbtReader.matches(decompressedBuf, namePos, nameLen, TILE_ENTITIES_NAME))
+                    && tagType == FastNbtReader.TAG_LIST) {
+                byte elemType = decompressedBuf.get();
+                if (elemType != FastNbtReader.TAG_COMPOUND) {
+                    return null;
+                }
+                int count = decompressedBuf.getInt();
+                for (int i = 0; i < count; i++) {
+                    int compoundStart = decompressedBuf.position();
+                    int targetX = Integer.MIN_VALUE;
+                    int targetY = Integer.MIN_VALUE;
+                    int targetZ = Integer.MIN_VALUE;
+
+                    while (true) {
+                        byte childType = decompressedBuf.get();
+                        if (childType == FastNbtReader.TAG_END) break;
+
+                        int cNameLen = decompressedBuf.getShort() & 0xFFFF;
+                        int cNamePos = decompressedBuf.position();
+                        decompressedBuf.position(cNamePos + cNameLen);
+
+                        if (childType == FastNbtReader.TAG_INT) {
+                            if (FastNbtReader.matches(decompressedBuf, cNamePos, cNameLen, COORD_X_NAME)) {
+                                targetX = decompressedBuf.getInt();
+                                continue;
+                            } else if (FastNbtReader.matches(decompressedBuf, cNamePos, cNameLen, COORD_Y_NAME)) {
+                                targetY = decompressedBuf.getInt();
+                                continue;
+                            } else if (FastNbtReader.matches(decompressedBuf, cNamePos, cNameLen, COORD_Z_NAME)) {
+                                targetZ = decompressedBuf.getInt();
+                                continue;
+                            }
+                        }
+                        FastNbtReader.skipTagPayload(decompressedBuf, childType);
+                    }
+
+                    int compoundEnd = decompressedBuf.position();
+
+                    if (targetX == worldX && targetY == worldY && targetZ == worldZ) {
+                        int compoundLen = compoundEnd - compoundStart;
+                        byte[] copy = new byte[compoundLen];
+                        int saved = decompressedBuf.position();
+                        decompressedBuf.position(compoundStart);
+                        decompressedBuf.get(copy);
+                        decompressedBuf.position(saved);
+                        return ByteBuffer.wrap(copy);
+                    }
+                }
+            } else {
+                FastNbtReader.skipTagPayload(decompressedBuf, tagType);
+            }
+        }
+
+        return null;
     }
 
     @Override
