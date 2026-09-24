@@ -129,7 +129,9 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
         LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
-            return cache.getOrCreateColumn(chunkX, chunkZ);
+            VoxelChunkColumn newCol = cache.getOrCreateColumn(chunkX, chunkZ);
+            populateHeightmapIfEmpty(chunk, newCol, chunkX, chunkZ);
+            return newCol;
         }
 
         IVoxelGrid diskFallback = cache.getDiskFallback();
@@ -138,6 +140,28 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         }
 
         return null;
+    }
+
+    private void populateHeightmapIfEmpty(LevelChunk chunk, VoxelChunkColumn col, int chunkX, int chunkZ) {
+        Heightmap2D colHm = col.getHeightmap();
+        if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    int h = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
+                    if (h > level.getMinBuildHeight()) {
+                        colHm.setHeight(x, z, (short) (h - 1));
+                    } else {
+                        net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(
+                                (chunkX << 4) | x, level.getMinBuildHeight(), (chunkZ << 4) | z);
+                        if (!chunk.getBlockState(pos).isAir()) {
+                            colHm.setHeight(x, z, (short) level.getMinBuildHeight());
+                        } else {
+                            colHm.setHeight(x, z, Heightmap2D.VOID_Y);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Override
@@ -150,27 +174,8 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
             VoxelChunkColumn col = cache.getOrCreateColumn(chunkX, chunkZ);
-            Heightmap2D colHm = col.getHeightmap();
-            if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
-                // Populate true heightmap using Minecraft's native LevelChunk motion-blocking heightmap
-                for (int z = 0; z < 16; z++) {
-                    for (int x = 0; x < 16; x++) {
-                        int h = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
-                        if (h > level.getMinBuildHeight()) {
-                            colHm.setHeight(x, z, (short) (h - 1));
-                        } else {
-                            net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(
-                                    (chunkX << 4) | x, level.getMinBuildHeight(), (chunkZ << 4) | z);
-                            if (!chunk.getBlockState(pos).isAir()) {
-                                colHm.setHeight(x, z, (short) level.getMinBuildHeight());
-                            } else {
-                                colHm.setHeight(x, z, Heightmap2D.VOID_Y);
-                            }
-                        }
-                    }
-                }
-            }
-            return colHm;
+            populateHeightmapIfEmpty(chunk, col, chunkX, chunkZ);
+            return col.getHeightmap();
         }
 
         IVoxelGrid diskFallback = cache.getDiskFallback();
@@ -179,6 +184,60 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         }
 
         return null;
+    }
+
+    @Override
+    public boolean isRegionEmpty(int regionX, int regionZ) {
+        if (hasLiveChunksInRegion(regionX, regionZ)) {
+            return false;
+        }
+        return cache.isRegionEmpty(regionX, regionZ);
+    }
+
+    @Override
+    public boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
+        if (isNearLiveChunks(worldBlockX, worldBlockZ)) {
+            return false;
+        }
+        return cache.isOutOfBounds(worldBlockX, worldBlockZ, stepX, stepZ);
+    }
+
+    private boolean hasLiveChunksInRegion(int regionX, int regionZ) {
+        if (level instanceof ServerLevel sl) {
+            for (net.minecraft.server.level.ServerPlayer player : sl.players()) {
+                int prx = player.getBlockX() >> 9;
+                int prz = player.getBlockZ() >> 9;
+                if (Math.abs(prx - regionX) <= 1 && Math.abs(prz - regionZ) <= 1) {
+                    return true;
+                }
+            }
+            net.minecraft.core.BlockPos spawn = sl.getSharedSpawnPos();
+            int srx = spawn.getX() >> 9;
+            int srz = spawn.getZ() >> 9;
+            if (Math.abs(srx - regionX) <= 1 && Math.abs(srz - regionZ) <= 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isNearLiveChunks(int worldBlockX, int worldBlockZ) {
+        if (level instanceof ServerLevel sl) {
+            for (net.minecraft.server.level.ServerPlayer player : sl.players()) {
+                int dx = Math.abs(player.getBlockX() - worldBlockX);
+                int dz = Math.abs(player.getBlockZ() - worldBlockZ);
+                if (dx <= 1024 && dz <= 1024) {
+                    return true;
+                }
+            }
+            net.minecraft.core.BlockPos spawn = sl.getSharedSpawnPos();
+            int dx = Math.abs(spawn.getX() - worldBlockX);
+            int dz = Math.abs(spawn.getZ() - worldBlockZ);
+            if (dx <= 1024 && dz <= 1024) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

@@ -200,4 +200,40 @@ public class McaRealWorldBenchmarkTest {
         // Scenario A target is > 1,500,000 ops/s
         assertTrue(opsPerSec >= 1_500_000.0, "Sky Fast-Pass target > 1,500,000 ops/s, got: " + opsPerSec);
     }
+
+    @Test
+    void testVoidLongDistanceBenchmark() {
+        final int RAYS = 100_000;
+        RayHitResult result = new RayHitResult();
+        Random rng = new Random(42);
+
+        // Warmup
+        for (int i = 0; i < 5_000; i++) {
+            double angle = rng.nextDouble() * 2.0 * Math.PI;
+            double dx = Math.cos(angle);
+            double dz = Math.sin(angle);
+            VoxelDDA.trace(256.0, 70.0, 256.0, dx, 0.0, dz, 99_999.0, grid, result);
+        }
+
+        long start = System.nanoTime();
+        long misses = 0;
+        for (int i = 0; i < RAYS; i++) {
+            double angle = rng.nextDouble() * 2.0 * Math.PI;
+            double dx = Math.cos(angle);
+            double dz = Math.sin(angle);
+            if (!VoxelDDA.trace(256.0, 70.0, 256.0, dx, 0.0, dz, 99_999.0, grid, result)) {
+                misses++;
+            }
+        }
+        long elapsed = System.nanoTime() - start;
+        double secs = elapsed / 1_000_000_000.0;
+        double opsPerSec = RAYS / secs;
+        double nsPerRay = (double) elapsed / RAYS;
+
+        System.out.printf("[SCENARIO B: 99,999m VOID RAYCAST] Executed %d rays of 99,999m in %.3f s%n", RAYS, secs);
+        System.out.printf("[SCENARIO B: 99,999m VOID RAYCAST] Misses: %d / %d%n", misses, RAYS);
+        System.out.printf("[SCENARIO B: 99,999m VOID RAYCAST] Throughput: %,.0f rays/second (%.1f ns/ray)%n", opsPerSec, nsPerRay);
+
+        assertTrue(opsPerSec >= 500_000.0, "Void 99,999m raycast throughput expected >= 500,000 ops/s, got: " + opsPerSec);
+    }
 }

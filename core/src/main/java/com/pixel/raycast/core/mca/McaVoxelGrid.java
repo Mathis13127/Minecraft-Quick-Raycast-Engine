@@ -39,6 +39,11 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final int maxSectionY;
     private volatile short highestWorldY = Short.MIN_VALUE;
 
+    private volatile int minBlockX = Integer.MAX_VALUE;
+    private volatile int maxBlockX = Integer.MIN_VALUE;
+    private volatile int minBlockZ = Integer.MAX_VALUE;
+    private volatile int maxBlockZ = Integer.MIN_VALUE;
+
     /**
      * Constructs an McaVoxelGrid with an in-memory block registry and default min build height (-64).
      *
@@ -88,6 +93,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         for (int i = 0; i < this.chunkLocks.length; i++) {
             this.chunkLocks[i] = new Object();
         }
+        scanRegionDirectoryBounds();
     }
 
     /**
@@ -205,6 +211,78 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         long rk = regionKey(reader.getRegionX(), reader.getRegionZ());
         regions.put(rk, reader);
         missingRegions.remove(rk);
+        updateBounds(reader.getRegionX(), reader.getRegionZ());
+    }
+
+    private synchronized void updateBounds(int rx, int rz) {
+        int bxMin = rx << 9;
+        int bxMax = (rx + 1) << 9;
+        int bzMin = rz << 9;
+        int bzMax = (rz + 1) << 9;
+        if (bxMin < minBlockX) minBlockX = bxMin;
+        if (bxMax > maxBlockX) maxBlockX = bxMax;
+        if (bzMin < minBlockZ) minBlockZ = bzMin;
+        if (bzMax > maxBlockZ) maxBlockZ = bzMax;
+    }
+
+    private void scanRegionDirectoryBounds() {
+        if (regionDirectory != null && java.nio.file.Files.isDirectory(regionDirectory)) {
+            try (java.nio.file.DirectoryStream<Path> stream = java.nio.file.Files.newDirectoryStream(regionDirectory, "r.*.*.mca")) {
+                for (Path p : stream) {
+                    String name = p.getFileName().toString();
+                    String[] parts = name.split("\\.");
+                    if (parts.length >= 4) {
+                        try {
+                            int rx = Integer.parseInt(parts[1]);
+                            int rz = Integer.parseInt(parts[2]);
+                            updateBounds(rx, rz);
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+            } catch (IOException e) {
+                LOGGER.log(System.Logger.Level.WARNING, "Failed to scan region directory {0}: {1}", regionDirectory, e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public boolean isRegionEmpty(int regionX, int regionZ) {
+        long rk = regionKey(regionX, regionZ);
+        if (missingRegions.contains(rk)) {
+            return true;
+        }
+        if (regions.containsKey(rk)) {
+            return false;
+        }
+        if (regionDirectory != null) {
+            Path mcaFile = regionDirectory.resolve("r." + regionX + "." + regionZ + ".mca");
+            if (!java.nio.file.Files.exists(mcaFile)) {
+                missingRegions.add(rk);
+                return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
+        if (minBlockX > maxBlockX) {
+            return false; // No bounded regions registered
+        }
+        if (stepX > 0 && worldBlockX >= maxBlockX) {
+            return true;
+        }
+        if (stepX < 0 && worldBlockX < minBlockX) {
+            return true;
+        }
+        if (stepZ > 0 && worldBlockZ >= maxBlockZ) {
+            return true;
+        }
+        if (stepZ < 0 && worldBlockZ < minBlockZ) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -309,6 +387,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 loadedChunks.add(cKey);
                 return 0;
             }
+            updateBounds(rx, rz);
 
             int localCx = chunkX & 31;
             int localCz = chunkZ & 31;

@@ -3,6 +3,7 @@ package com.pixel.raycast.core.traversal;
 import com.pixel.raycast.core.api.IVoxelGrid;
 import com.pixel.raycast.core.api.RayHitResult;
 import com.pixel.raycast.core.math.Ray3f;
+import com.pixel.raycast.core.voxel.Heightmap2D;
 import com.pixel.raycast.core.voxel.VoxelFace;
 import com.pixel.raycast.core.voxel.VoxelSection;
 
@@ -108,6 +109,13 @@ public final class VoxelDDA {
         int stepY = (dirY > 0) ? 1 : ((dirY < 0) ? -1 : 0);
         int stepZ = (dirZ > 0) ? 1 : ((dirZ < 0) ? -1 : 0);
 
+        // Instant O(1) out-of-bounds culling if start point is already outside world heading away
+        int x0 = (int) Math.floor(startX);
+        int z0 = (int) Math.floor(startZ);
+        if (grid.isOutOfBounds(x0, z0, stepX, stepZ)) {
+            return false; // Zero DDA steps: ray is outside all known regions and pointing away into void
+        }
+
         // Interval between voxel boundaries along each axis
         double tDeltaX = (stepX != 0) ? Math.abs(1.0 / dirX) : Double.MAX_VALUE;
         double tDeltaY = (stepY != 0) ? Math.abs(1.0 / dirY) : Double.MAX_VALUE;
@@ -144,9 +152,76 @@ public final class VoxelDDA {
                     currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
                 }
 
-                // 1. Chunk-Level Macro-Skip: bypass entire 16x16 chunk column horizontally if above terrain
-                if (currentHm != null) {
-                    short highestY = currentHm.getHighestY();
+                // 0. Out-of-bounds termination: ray left all known geometry heading into void
+                if (grid.isOutOfBounds(x, z, stepX, stepZ)) {
+                    break;
+                }
+
+                // 1. Region-Level Macro-Skip: bypass entire 512x512 block region if absent or empty
+                int currentRx = currentSx >> 5;
+                int currentRz = currentSz >> 5;
+                if (grid.isRegionEmpty(currentRx, currentRz)) {
+                    int regMinX = currentRx << 9;
+                    int regMinZ = currentRz << 9;
+
+                    double exitRegTx = (stepX > 0) ? ((regMinX + 512.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - regMinX) * tDeltaX) : Double.MAX_VALUE);
+                    double exitRegTz = (stepZ > 0) ? ((regMinZ + 512.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - regMinZ) * tDeltaZ) : Double.MAX_VALUE);
+                    double exitRegT = Math.min(exitRegTx, exitRegTz);
+
+                    if (exitRegT > t) {
+                        if (exitRegT > maxDist) {
+                            break;
+                        }
+
+                        if (Math.abs(exitRegTx - exitRegTz) < 1e-9) {
+                            x = (stepX > 0) ? (regMinX + 512) : (regMinX - 1);
+                            z = (stepZ > 0) ? (regMinZ + 512) : (regMinZ - 1);
+                            y = (int) Math.floor(startY + exitRegT * dirY);
+                            t = exitRegTx;
+                            lastFace = (stepX > 0) ? VoxelFace.WEST : VoxelFace.EAST;
+                        } else if (exitRegT == exitRegTx) {
+                            x = (stepX > 0) ? (regMinX + 512) : (regMinX - 1);
+                            y = (int) Math.floor(startY + exitRegT * dirY);
+                            z = Math.max(regMinZ, Math.min(regMinZ + 511, (int) Math.floor(startZ + exitRegT * dirZ)));
+                            t = exitRegTx;
+                            lastFace = (stepX > 0) ? VoxelFace.WEST : VoxelFace.EAST;
+                        } else {
+                            x = Math.max(regMinX, Math.min(regMinX + 511, (int) Math.floor(startX + exitRegT * dirX)));
+                            y = (int) Math.floor(startY + exitRegT * dirY);
+                            z = (stepZ > 0) ? (regMinZ + 512) : (regMinZ - 1);
+                            t = exitRegTz;
+                            lastFace = (stepZ > 0) ? VoxelFace.NORTH : VoxelFace.SOUTH;
+                        }
+
+                        tMaxX = (stepX > 0) ? ((x + 1.0 - startX) * tDeltaX) : ((stepX < 0) ? ((startX - x) * tDeltaX) : Double.MAX_VALUE);
+                        tMaxY = (stepY > 0) ? ((y + 1.0 - startY) * tDeltaY) : ((stepY < 0) ? ((startY - y) * tDeltaY) : Double.MAX_VALUE);
+                        tMaxZ = (stepZ > 0) ? ((z + 1.0 - startZ) * tDeltaZ) : ((stepZ < 0) ? ((startZ - z) * tDeltaZ) : Double.MAX_VALUE);
+
+                        currentSx = x >> 4;
+                        currentSy = y >> 4;
+                        currentSz = z >> 4;
+                        currentChunkX = currentSx;
+                        currentChunkZ = currentSz;
+                        currentColumn = grid.getColumn(currentChunkX, currentChunkZ);
+                        currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);
+                        currentSection = (currentColumn != null) ? currentColumn.getSection(currentSy) : null;
+                        if (currentSection == null) {
+                            currentSection = grid.getSection(currentSx, currentSy, currentSz);
+                        }
+
+                        if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
+                            if (checkHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, t, tMaxX, tMaxY, tMaxZ, lastFace, currentSection, grid, subHit, result)) {
+                                return true;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // 2. Chunk-Level Macro-Skip: bypass entire 16x16 chunk column horizontally if above terrain or empty column
+                boolean columnEmpty = (currentColumn != null && currentColumn.isEmpty());
+                if (currentHm != null || columnEmpty) {
+                    short highestY = (currentHm != null) ? currentHm.getHighestY() : Heightmap2D.VOID_Y;
                     int chunkMinX = currentChunkX << 4;
                     int chunkMinZ = currentChunkZ << 4;
 
@@ -160,7 +235,7 @@ public final class VoxelDDA {
                         double yEnd = startY + tEnd * dirY;
                         double minYInChunk = Math.min(yCurrent, yEnd);
 
-                        if (currentHm.isAboveTerrain(minYInChunk)) {
+                        if (columnEmpty || (currentHm != null && currentHm.isAboveTerrain(minYInChunk))) {
                             if (exitChunkT > maxDist) {
                                 break;
                             }

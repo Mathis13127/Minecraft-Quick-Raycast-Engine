@@ -218,4 +218,19 @@ public final class VoxelChunkColumn {
         }
         return count;
     }
+
+    /**
+     * Checks if this entire column contains zero solid blocks (pure air/void).
+     *
+     * @return True if all vertical sections are empty or unallocated
+     */
+    public boolean isEmpty() {
+        for (int i = 0; i < sectionCount; i++) {
+            VoxelSection sec = sections.get(i);
+            if (sec != null && !sec.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

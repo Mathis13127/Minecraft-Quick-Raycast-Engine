@@ -272,6 +272,22 @@ public final class VoxelCache implements IVoxelGrid {
         return diskFallback;
     }
 
+    @Override
+    public boolean isRegionEmpty(int regionX, int regionZ) {
+        if (diskFallback != null) {
+            return diskFallback.isRegionEmpty(regionX, regionZ);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
+        if (diskFallback != null) {
+            return diskFallback.isOutOfBounds(worldBlockX, worldBlockZ, stepX, stepZ);
+        }
+        return false;
+    }
+
     /**
      * Gets the total number of chunk columns currently loaded in memory.
      *

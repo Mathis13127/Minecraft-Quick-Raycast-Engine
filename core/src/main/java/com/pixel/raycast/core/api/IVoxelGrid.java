@@ -103,4 +103,29 @@ public interface IVoxelGrid {
     default com.pixel.raycast.core.shape.ShapeRegistry getShapeRegistry() {
         return null;
     }
+
+    /**
+     * Checks if the specified 512x512 block region (32x32 chunks) is entirely absent or empty.
+     *
+     * @param regionX Region X coordinate (world block X >> 9)
+     * @param regionZ Region Z coordinate (world block Z >> 9)
+     * @return True if the entire region contains no solid blocks or is non-existent
+     */
+    default boolean isRegionEmpty(int regionX, int regionZ) {
+        return false;
+    }
+
+    /**
+     * Checks if the given world block coordinate is outside all known populated/disk regions
+     * and the ray direction is pointing outward away from any known geometry.
+     *
+     * @param worldBlockX Current world block X coordinate
+     * @param worldBlockZ Current world block Z coordinate
+     * @param stepX       Ray horizontal stepping direction along X (-1, 0, +1)
+     * @param stepZ       Ray horizontal stepping direction along Z (-1, 0, +1)
+     * @return True if the ray has exited the known universe and will never encounter solid matter
+     */
+    default boolean isOutOfBounds(int worldBlockX, int worldBlockZ, int stepX, int stepZ) {
+        return false;
+    }
 }
