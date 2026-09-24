@@ -28,7 +28,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
 
     private final BlockIdRegistry blockIdRegistry;
     private final ShapeRegistry shapeRegistry;
-    private final IVoxelWorld diskFallback;
+    private volatile IVoxelWorld diskFallback;
     private final int minSectionY;
     private final int maxSectionY;
 
@@ -274,6 +274,15 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      */
     public IVoxelWorld getDiskFallback() {
         return diskFallback;
+    }
+
+    /**
+     * Dynamically sets or replaces the disk fallback provider (e.g. Anvil MCA reader).
+     *
+     * @param diskFallback Underlying disk provider for uncached sections
+     */
+    public void setDiskFallback(IVoxelWorld diskFallback) {
+        this.diskFallback = diskFallback;
     }
 
     @Override

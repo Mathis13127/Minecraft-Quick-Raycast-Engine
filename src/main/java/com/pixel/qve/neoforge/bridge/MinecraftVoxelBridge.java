@@ -287,12 +287,35 @@ public final class MinecraftVoxelBridge {
                 LOGGER.error("Failed to resolve Anvil region directory for level {}: {}",
                         level.dimension().location(), e.getMessage(), e);
             }
+        } else if (level.isClientSide() && net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
+            diskFallback = resolveClientDiskFallback(level);
         }
 
         int minSectionY = level.getMinSection();
         int maxSectionY = level.getMaxSection();
         UnifiedVoxelCache cache = new UnifiedVoxelCache(BLOCK_REGISTRY, SHAPE_REGISTRY, diskFallback, minSectionY, maxSectionY);
         return new MinecraftVoxelGrid(level, cache);
+    }
+
+    private static IVoxelGrid resolveClientDiskFallback(Level level) {
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc != null && mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+                net.minecraft.server.MinecraftServer server = mc.getSingleplayerServer();
+                Path rootPath = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
+                Path dimFolder = net.minecraft.world.level.dimension.DimensionType.getStorageFolder(level.dimension(), rootPath);
+                Path regionDir = dimFolder.resolve("region");
+                if (Files.isDirectory(regionDir)) {
+                    LOGGER.info("Raycast Bridge: Connected client singleplayer Anvil disk fallback for dimension {} at {}",
+                            level.dimension().location(), regionDir);
+                    return new McaVoxelGrid(BLOCK_REGISTRY, SHAPE_REGISTRY, regionDir, (short) level.getMinBuildHeight());
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.debug("Could not resolve client Anvil disk fallback for dimension {}: {}",
+                    level.dimension().location(), t.getMessage());
+        }
+        return null;
     }
 
     /**
