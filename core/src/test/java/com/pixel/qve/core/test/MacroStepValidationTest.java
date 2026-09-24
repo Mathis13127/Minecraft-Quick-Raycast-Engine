@@ -44,7 +44,7 @@ public class MacroStepValidationTest {
             return heightmaps.get(chunkKey(chunkX, chunkZ));
         }
 
-        public void setVoxel(int wx, int wy, int wz, boolean solid, short blockId) {
+        public void setVoxel(int wx, int wy, int wz, boolean solid, int blockId) {
             int sx = wx >> 4;
             int sy = wy >> 4;
             int sz = wz >> 4;
@@ -78,7 +78,7 @@ public class MacroStepValidationTest {
         VoxelSection currentSection = grid.getSection(currentSx, currentSy, currentSz);
 
         if (currentSection != null && !currentSection.isEmpty() && currentSection.isSolid(x & 15, y & 15, z & 15)) {
-            short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
+            int blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
             result.set(true, startX, startY, startZ, x, y, z, VoxelFace.NONE, blockId, 0.0);
             return true;
         }
@@ -141,7 +141,7 @@ public class MacroStepValidationTest {
                 double hitX = startX + t * dirX;
                 double hitY = startY + t * dirY;
                 double hitZ = startZ + t * dirZ;
-                short blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
+                int blockId = currentSection.getBlockId(x & 15, y & 15, z & 15);
                 result.set(true, hitX, hitY, hitZ, x, y, z, lastFace, blockId, t);
                 return true;
             }

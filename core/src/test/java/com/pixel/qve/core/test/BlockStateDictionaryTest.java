@@ -55,14 +55,14 @@ public class BlockStateDictionaryTest {
         int namePos = 1 + 2 + 4 + 2; // skip tag byte (1), "Name" length (2), "Name" string (4), value length (2)
         int nameLen = "minecraft:oak_stairs".length();
 
-        short id1 = dictionary.getOrRegisterFromBytes(buf, namePos, nameLen, propsPayloadStart, propsPayloadLen);
+        int id1 = dictionary.getOrRegisterFromBytes(buf, namePos, nameLen, propsPayloadStart, propsPayloadLen);
         assertTrue(id1 > 0, "Registered block ID should be positive");
 
         String canonical = dictionary.getCanonicalState(id1);
         assertEquals("minecraft:oak_stairs[facing=north,half=bottom]", canonical);
 
         // Second lookup must hit L1 cache
-        short id2 = dictionary.getOrRegisterFromBytes(buf, namePos, nameLen, propsPayloadStart, propsPayloadLen);
+        int id2 = dictionary.getOrRegisterFromBytes(buf, namePos, nameLen, propsPayloadStart, propsPayloadLen);
         assertEquals(id1, id2, "Subsequent lookup must return identical cached ID");
     }
 
@@ -112,7 +112,7 @@ public class BlockStateDictionaryTest {
             lastState.set(canonicalState);
         });
 
-        dictionary.registerState(12345L, (short) 10, "minecraft:stone_stairs[facing=south]");
+        dictionary.registerState(12345L, 10, "minecraft:stone_stairs[facing=south]");
         assertEquals(1, callCount.get());
         assertEquals("minecraft:stone_stairs[facing=south]", lastState.get());
     }

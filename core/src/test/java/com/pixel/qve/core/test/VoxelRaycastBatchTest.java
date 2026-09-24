@@ -22,7 +22,7 @@ public class VoxelRaycastBatchTest {
     @DisplayName("VoxelRaycastBatch executes batch raycasts with exact results matching single traces")
     void testRaycastBatchExecution() {
         BlockIdRegistry registry = new BlockIdRegistry();
-        short stoneId = registry.getOrRegister("minecraft:stone");
+        int stoneId = registry.getOrRegister("minecraft:stone");
 
         UnifiedVoxelCache cache = new UnifiedVoxelCache(registry);
         VoxelChunkColumn col = cache.getOrCreateColumn(0, 0);

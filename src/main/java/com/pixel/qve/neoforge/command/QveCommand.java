@@ -180,7 +180,7 @@ public final class QveCommand {
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
         BlockState state = level.getBlockState(pos);
         String blockKey = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
-        short blockId = grid.getBlockId(pos.getX(), pos.getY(), pos.getZ());
+        int blockId = grid.getBlockId(pos.getX(), pos.getY(), pos.getZ());
         boolean solid = grid.isSolid(pos.getX(), pos.getY(), pos.getZ());
 
         var shapeRegistry = MinecraftVoxelBridge.getShapeRegistry();

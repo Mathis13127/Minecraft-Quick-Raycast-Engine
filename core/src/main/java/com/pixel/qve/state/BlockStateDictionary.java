@@ -28,11 +28,11 @@ public final class BlockStateDictionary {
     private static final int TABLE_MASK = TABLE_SIZE - 1;
 
     private final long[] hashKeys = new long[TABLE_SIZE];
-    private final short[] hashValues = new short[TABLE_SIZE];
+    private final int[] hashValues = new int[TABLE_SIZE];
     private final long[] occupied = new long[TABLE_SIZE / 64];
 
-    private final Map<Long, Short> stateKeyToId = new ConcurrentHashMap<>();
-    private final Map<Short, String> idToCanonicalState = new ConcurrentHashMap<>();
+    private final Map<Long, Integer> stateKeyToId = new ConcurrentHashMap<>();
+    private final Map<Integer, String> idToCanonicalState = new ConcurrentHashMap<>();
 
     private final BlockIdRegistry blockRegistry;
     private final PropertyIndexRegistry propertyRegistry = new PropertyIndexRegistry();
@@ -40,7 +40,7 @@ public final class BlockStateDictionary {
     /**
      * Constructs a BlockStateDictionary bound to the given BlockIdRegistry.
      *
-     * @param blockRegistry Target registry for storing and assigning 16-bit IDs
+     * @param blockRegistry Target registry for storing and assigning 32-bit IDs
      */
     public BlockStateDictionary(BlockIdRegistry blockRegistry) {
         this.blockRegistry = Objects.requireNonNull(blockRegistry, "BlockIdRegistry cannot be null");
@@ -59,9 +59,9 @@ public final class BlockStateDictionary {
      * Retrieves the mapped block ID for the given composite state key if present in L1 cache.
      *
      * @param stateKey 64-bit composite key (nameHash &lt;&lt; 32 | propsHash)
-     * @return 16-bit block ID, or 0 if not present in cache
+     * @return 32-bit block ID, or 0 if not present in cache
      */
-    public short getIfPresent(long stateKey) {
+    public int getIfPresent(long stateKey) {
         int hash = (int) (stateKey ^ (stateKey >>> 32));
         int slot = (hash ^ (hash >>> 16)) & TABLE_MASK;
         int wordIdx = slot >>> 6;
@@ -71,7 +71,7 @@ public final class BlockStateDictionary {
             return hashValues[slot];
         }
 
-        Short id = stateKeyToId.get(stateKey);
+        Integer id = stateKeyToId.get(stateKey);
         if (id != null) {
             populateL1(slot, wordIdx, bit, stateKey, id);
             return id;
@@ -80,7 +80,7 @@ public final class BlockStateDictionary {
         return 0;
     }
 
-    private synchronized void populateL1(int slot, int wordIdx, long bit, long stateKey, short id) {
+    private synchronized void populateL1(int slot, int wordIdx, long bit, long stateKey, int id) {
         hashKeys[slot] = stateKey;
         hashValues[slot] = id;
         occupied[wordIdx] |= bit;
@@ -93,7 +93,7 @@ public final class BlockStateDictionary {
      */
     @FunctionalInterface
     public interface StateRegistrationListener {
-        void onStateRegistered(short blockId, String canonicalState);
+        void onStateRegistered(int blockId, String canonicalState);
     }
 
     /**
@@ -110,10 +110,10 @@ public final class BlockStateDictionary {
      * Automatically decomposes bracketed properties into the PropertyIndexRegistry.
      *
      * @param stateKey       64-bit composite state key
-     * @param blockId        16-bit block ID
+     * @param blockId        32-bit block ID
      * @param canonicalState Full canonical blockstate string (e.g. "minecraft:oak_stairs[facing=north]")
      */
-    public void registerState(long stateKey, short blockId, String canonicalState) {
+    public void registerState(long stateKey, int blockId, String canonicalState) {
         stateKeyToId.put(stateKey, blockId);
         if (canonicalState != null) {
             idToCanonicalState.put(blockId, canonicalState);
@@ -137,7 +137,7 @@ public final class BlockStateDictionary {
         }
     }
 
-    private void parseAndRegisterPropertiesString(short blockId, String propsString) {
+    private void parseAndRegisterPropertiesString(int blockId, String propsString) {
         if (propsString.isEmpty()) return;
         String[] parts = propsString.split(",");
         short[] pairs = new short[parts.length * 2];
@@ -168,9 +168,9 @@ public final class BlockStateDictionary {
      * @param nameLen         Byte length of block name in buf
      * @param propsPos        Byte position of Properties compound, or -1 if no properties
      * @param propsCompoundLen Byte length of Properties compound payload, or 0 if no properties
-     * @return 16-bit block identifier
+     * @return 32-bit integer block identifier
      */
-    public short getOrRegisterFromBytes(ByteBuffer buf, int namePos, int nameLen, int propsPos, int propsCompoundLen) {
+    public int getOrRegisterFromBytes(ByteBuffer buf, int namePos, int nameLen, int propsPos, int propsCompoundLen) {
         int nameHash = FastNbtReader.hashBytes(buf, namePos, nameLen);
         int propsHash = 0;
 
@@ -179,7 +179,7 @@ public final class BlockStateDictionary {
         }
 
         long stateKey = (((long) nameHash) << 32) | ((long) propsHash & 0xFFFFFFFFL);
-        short cached = getIfPresent(stateKey);
+        int cached = getIfPresent(stateKey);
         if (cached > 0) {
             return cached;
         }
@@ -195,7 +195,7 @@ public final class BlockStateDictionary {
             canonicalState = baseName;
         }
 
-        short id = blockRegistry.getOrRegister(canonicalState);
+        int id = blockRegistry.getOrRegister(canonicalState);
         registerState(stateKey, id, canonicalState);
         return id;
     }
@@ -297,10 +297,10 @@ public final class BlockStateDictionary {
     /**
      * Retrieves the canonical state string associated with a given block ID.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return Canonical state string, or null if unmapped
      */
-    public String getCanonicalState(short blockId) {
+    public String getCanonicalState(int blockId) {
         String state = idToCanonicalState.get(blockId);
         if (state != null) {
             return state;
@@ -311,22 +311,22 @@ public final class BlockStateDictionary {
     /**
      * Retrieves the property value ID for a given block ID and property key ID.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyId   16-bit property key ID
      * @return 16-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
      */
-    public short getPropertyValue(short blockId, short keyId) {
+    public short getPropertyValue(int blockId, short keyId) {
         return propertyRegistry.getPropertyValue(blockId, keyId);
     }
 
     /**
      * Retrieves the property value ID for a given block ID and property key name (e.g. "facing").
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyName Property key name
      * @return 16-bit value ID or {@link PropertyIndexRegistry#NO_VALUE}
      */
-    public short getPropertyValue(short blockId, String keyName) {
+    public short getPropertyValue(int blockId, String keyName) {
         short keyId = propertyRegistry.getKeyId(keyName);
         if (keyId == PropertyIndexRegistry.NO_VALUE) {
             return PropertyIndexRegistry.NO_VALUE;
@@ -337,22 +337,22 @@ public final class BlockStateDictionary {
     /**
      * Checks if a block ID possesses the specified property.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyName Property key name
      * @return True if present
      */
-    public boolean hasProperty(short blockId, String keyName) {
+    public boolean hasProperty(int blockId, String keyName) {
         return getPropertyValue(blockId, keyName) != PropertyIndexRegistry.NO_VALUE;
     }
 
     /**
      * Gets the human-readable string value for a block ID and property key name.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyName Property key name
      * @return Value string, or null if absent
      */
-    public String getPropertyValueName(short blockId, String keyName) {
+    public String getPropertyValueName(int blockId, String keyName) {
         short keyId = propertyRegistry.getKeyId(keyName);
         if (keyId == PropertyIndexRegistry.NO_VALUE) {
             return null;
@@ -363,10 +363,10 @@ public final class BlockStateDictionary {
     /**
      * Formats the properties of a block ID into a canonical bracketed string representation (e.g. "[facing=north,half=bottom]").
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return Formatted string, or empty string if no properties
      */
-    public String formatProperties(short blockId) {
+    public String formatProperties(int blockId) {
         return propertyRegistry.formatProperties(blockId);
     }
 
@@ -375,7 +375,7 @@ public final class BlockStateDictionary {
      */
     public synchronized void clear() {
         java.util.Arrays.fill(hashKeys, 0L);
-        java.util.Arrays.fill(hashValues, (short) 0);
+        java.util.Arrays.fill(hashValues, 0);
         java.util.Arrays.fill(occupied, 0L);
         stateKeyToId.clear();
         idToCanonicalState.clear();

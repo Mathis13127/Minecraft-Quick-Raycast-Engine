@@ -270,11 +270,12 @@ public final class PropertyIndexRegistry {
      * Stores property pairs {@code [keyId_0, valId_0, keyId_1, valId_1, ...]} for a given block ID,
      * packing each pair into a single 32-bit int {@code ((keyId << 16) | valId)}.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param pairs   Array of alternating key-value short pairs
      */
-    public synchronized void registerBlockProperties(short blockId, short[] pairs) {
-        int index = blockId & 0xFFFF;
+    public synchronized void registerBlockProperties(int blockId, short[] pairs) {
+        if (blockId <= 0) return;
+        int index = blockId;
         ensureBlockCapacity(index + 1);
 
         if (pairs == null || pairs.length == 0) {
@@ -295,11 +296,12 @@ public final class PropertyIndexRegistry {
     /**
      * Stores already-packed 32-bit property pairs for a given block ID.
      *
-     * @param blockId     16-bit block ID
+     * @param blockId     32-bit block ID
      * @param packedPairs Array of packed ((keyId &lt;&lt; 16) | valId)
      */
-    public synchronized void registerBlockPropertiesPacked(short blockId, int[] packedPairs) {
-        int index = blockId & 0xFFFF;
+    public synchronized void registerBlockPropertiesPacked(int blockId, int[] packedPairs) {
+        if (blockId <= 0) return;
+        int index = blockId;
         ensureBlockCapacity(index + 1);
         blockProperties[index] = packedPairs;
     }
@@ -307,27 +309,27 @@ public final class PropertyIndexRegistry {
     /**
      * Retrieves the packed property array for a given block ID.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return Array of packed ints, or null if none
      */
-    public int[] getBlockPropertiesPacked(short blockId) {
-        int index = blockId & 0xFFFF;
+    public int[] getBlockPropertiesPacked(int blockId) {
+        int index = blockId;
         int[][] props = this.blockProperties;
-        return (index < props.length) ? props[index] : null;
+        return (index >= 0 && index < props.length) ? props[index] : null;
     }
 
     /**
      * Ultra-fast O(1) query returning the property value ID for a given block ID and key ID.
      * Executes in ~1-2 CPU cycles via linear scan across a small (4-16 bytes) L1-resident array.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyId   16-bit property key ID
      * @return 16-bit value ID, or {@link #NO_VALUE} (-1) if property is not present on this block
      */
-    public short getPropertyValue(short blockId, short keyId) {
-        int index = blockId & 0xFFFF;
+    public short getPropertyValue(int blockId, short keyId) {
+        int index = blockId;
         int[][] props = this.blockProperties;
-        if (index >= props.length) {
+        if (index < 0 || index >= props.length) {
             return NO_VALUE;
         }
         int[] pairs = props[index];
@@ -347,22 +349,22 @@ public final class PropertyIndexRegistry {
     /**
      * Returns true if the block possesses the specified property.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyId   16-bit property key ID
      * @return True if present
      */
-    public boolean hasProperty(short blockId, short keyId) {
+    public boolean hasProperty(int blockId, short keyId) {
         return getPropertyValue(blockId, keyId) != NO_VALUE;
     }
 
     /**
      * Retrieves the human-readable string value for a given block ID and property key ID.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param keyId   16-bit property key ID
      * @return Value string, or null if property absent
      */
-    public String getPropertyValueName(short blockId, short keyId) {
+    public String getPropertyValueName(int blockId, short keyId) {
         short valId = getPropertyValue(blockId, keyId);
         if (valId == NO_VALUE) {
             return null;
@@ -373,10 +375,10 @@ public final class PropertyIndexRegistry {
     /**
      * Formats all properties of a block ID into a canonical bracketed string representation (e.g. "[facing=north,half=bottom]").
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return Formatted string, or empty string if no properties
      */
-    public String formatProperties(short blockId) {
+    public String formatProperties(int blockId) {
         int[] packed = getBlockPropertiesPacked(blockId);
         if (packed == null || packed.length == 0) {
             return "";

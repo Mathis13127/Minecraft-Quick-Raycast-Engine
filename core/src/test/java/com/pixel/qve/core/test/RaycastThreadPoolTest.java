@@ -62,7 +62,7 @@ public class RaycastThreadPoolTest {
     @DisplayName("Parallel DDA Raycasting on UnifiedVoxelCache via RaycastThreadPool")
     void testParallelRaycastingOnGrid() {
         BlockIdRegistry registry = new BlockIdRegistry();
-        short stoneId = registry.getOrRegister("minecraft:stone");
+        int stoneId = registry.getOrRegister("minecraft:stone");
         UnifiedVoxelCache cache = new UnifiedVoxelCache(registry);
 
         // Populate a floor at Y=10

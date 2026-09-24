@@ -13,8 +13,8 @@ public class BlockStatePaletteUnpackerTest {
     @Test
     @DisplayName("Single palette entry: non-air populates full solidCount and is not empty")
     void testSinglePaletteSolidEntry() {
-        short stoneId = 12;
-        short[] palette = new short[]{ stoneId };
+        int stoneId = 12;
+        int[] palette = new int[]{ stoneId };
 
         // Test unpackDirect
         VoxelSection direct = BlockStatePaletteUnpacker.unpackDirect(palette, null);
@@ -36,7 +36,7 @@ public class BlockStatePaletteUnpackerTest {
     @Test
     @DisplayName("Single palette entry: air produces empty section")
     void testSinglePaletteAirEntry() {
-        short[] palette = new short[]{ BlockIdRegistry.AIR_ID };
+        int[] palette = new int[]{ BlockIdRegistry.AIR_ID };
 
         VoxelSection direct = BlockStatePaletteUnpacker.unpackDirect(palette, null);
         assertTrue(direct.isEmpty());
@@ -51,9 +51,9 @@ public class BlockStatePaletteUnpackerTest {
     @Test
     @DisplayName("Multi-entry palette: accurately computes solidCount and occupancy")
     void testMultiEntryPalette() {
-        short stoneId = 1;
-        short airId = BlockIdRegistry.AIR_ID;
-        short[] palette = new short[]{ airId, stoneId };
+        int stoneId = 1;
+        int airId = BlockIdRegistry.AIR_ID;
+        int[] palette = new int[]{ airId, stoneId };
 
         // 4096 entries, bitsPerBlock = 4 (min in Minecraft). 16 entries per long.
         // 4096 / 16 = 256 longs.

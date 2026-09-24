@@ -233,7 +233,7 @@ public final class McaRegionReader implements Closeable {
 
     private int parseSection(ByteBuffer buf, ChunkSectionConsumer consumer) {
         int sectionY = Integer.MIN_VALUE;
-        short[] paletteIds = null;
+        int[] paletteIds = null;
         long[] data = null;
 
         while (true) {
@@ -260,9 +260,9 @@ public final class McaRegionReader implements Closeable {
                         buf.get(); // elemType (10)
                         int pCount = buf.getInt();
                         if (pCount == 1) {
-                            paletteIds = new short[] { parsePaletteEntry(buf) };
+                            paletteIds = new int[] { parsePaletteEntry(buf) };
                         } else {
-                            paletteIds = new short[pCount];
+                            paletteIds = new int[pCount];
                             for (int pi = 0; pi < pCount; pi++) {
                                 paletteIds[pi] = parsePaletteEntry(buf);
                             }
@@ -295,7 +295,7 @@ public final class McaRegionReader implements Closeable {
         return 0;
     }
 
-    private short parsePaletteEntry(ByteBuffer buf) {
+    private int parsePaletteEntry(ByteBuffer buf) {
         int strPos = -1;
         int strLen = 0;
         int propsPos = -1;

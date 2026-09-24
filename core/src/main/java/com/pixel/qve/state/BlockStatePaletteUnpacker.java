@@ -23,34 +23,34 @@ public final class BlockStatePaletteUnpacker {
     /**
      * Unpacks block states from palette IDs and optional data longs into a newly allocated {@link VoxelSection}.
      *
-     * @param paletteIds Array of 16-bit block IDs corresponding to each palette index
+     * @param paletteIds Array of 32-bit block IDs corresponding to each palette index
      * @param data       Packed long array containing bit fields (can be null or empty for single-entry palettes)
      * @return Fully populated VoxelSection
      */
-    public static VoxelSection unpack(short[] paletteIds, long[] data) {
+    public static VoxelSection unpack(int[] paletteIds, long[] data) {
         return unpackDirect(paletteIds, data, null);
     }
 
     /**
      * Unpacks block states into an existing {@link VoxelSection} to avoid heap allocations.
      *
-     * @param paletteIds Array of 16-bit block IDs corresponding to each palette index
+     * @param paletteIds Array of 32-bit block IDs corresponding to each palette index
      * @param data       Packed long array containing bit fields (can be null or empty for single-entry palettes)
      * @param target     Target section to populate
      */
-    public static void unpackInto(short[] paletteIds, long[] data, VoxelSection target) {
+    public static void unpackInto(int[] paletteIds, long[] data, VoxelSection target) {
         unpackInto(paletteIds, data, target, null);
     }
 
     /**
      * Unpacks block states into an existing {@link VoxelSection} with optional full-cube validation.
      *
-     * @param paletteIds    Array of 16-bit block IDs corresponding to each palette index
+     * @param paletteIds    Array of 32-bit block IDs corresponding to each palette index
      * @param data          Packed long array containing bit fields
      * @param target        Target section to populate
      * @param shapeRegistry Optional ShapeRegistry for full-cube evaluation
      */
-    public static void unpackInto(short[] paletteIds, long[] data, VoxelSection target, ShapeRegistry shapeRegistry) {
+    public static void unpackInto(int[] paletteIds, long[] data, VoxelSection target, ShapeRegistry shapeRegistry) {
         Objects.requireNonNull(target, "Target VoxelSection cannot be null");
         target.clear();
 
@@ -60,7 +60,7 @@ public final class BlockStatePaletteUnpacker {
 
         // Single palette entry: section is completely homogeneous
         if (paletteIds.length == 1) {
-            short blockId = paletteIds[0];
+            int blockId = paletteIds[0];
             if (blockId != BlockIdRegistry.AIR_ID) {
                 Arrays.fill(target.getBitmask(), ~0L);
                 Arrays.fill(target.getBlockIds(), blockId);
@@ -80,7 +80,7 @@ public final class BlockStatePaletteUnpacker {
         long bitMask = (1L << bitsPerBlock) - 1L;
 
         long[] mask = target.getBitmask();
-        short[] ids = target.getBlockIds();
+        int[] ids = target.getBlockIds();
         int solidCount = 0;
 
         int voxelIdx = 0;
@@ -95,7 +95,7 @@ public final class BlockStatePaletteUnpacker {
                     throw new IllegalStateException("Palette index out of bounds: index=" + paletteIndex + ", palette size=" + paletteIds.length);
                 }
 
-                short blockId = paletteIds[paletteIndex];
+                int blockId = paletteIds[paletteIndex];
                 ids[voxelIdx] = blockId;
 
                 if (blockId != BlockIdRegistry.AIR_ID) {
@@ -117,29 +117,29 @@ public final class BlockStatePaletteUnpacker {
     /**
      * Efficiently builds a section directly with verified solid count using divisionless unpacking.
      *
-     * @param paletteIds Array of 16-bit block IDs corresponding to each palette index
+     * @param paletteIds Array of 32-bit block IDs corresponding to each palette index
      * @param data       Packed long array containing bit fields
      * @return Newly constructed VoxelSection
      */
-    public static VoxelSection unpackDirect(short[] paletteIds, long[] data) {
+    public static VoxelSection unpackDirect(int[] paletteIds, long[] data) {
         return unpackDirect(paletteIds, data, null);
     }
 
     /**
      * Efficiently builds a section directly with full-cube fast-path analysis and compact homogeneous allocation.
      *
-     * @param paletteIds    Array of 16-bit block IDs corresponding to each palette index
+     * @param paletteIds    Array of 32-bit block IDs corresponding to each palette index
      * @param data          Packed long array containing bit fields
      * @param shapeRegistry Optional ShapeRegistry for full-cube classification
      * @return Newly constructed VoxelSection
      */
-    public static VoxelSection unpackDirect(short[] paletteIds, long[] data, ShapeRegistry shapeRegistry) {
+    public static VoxelSection unpackDirect(int[] paletteIds, long[] data, ShapeRegistry shapeRegistry) {
         if (paletteIds == null || paletteIds.length == 0) {
             return VoxelSection.EMPTY;
         }
 
         if (paletteIds.length == 1) {
-            short blockId = paletteIds[0];
+            int blockId = paletteIds[0];
             if (blockId == BlockIdRegistry.AIR_ID) {
                 return VoxelSection.EMPTY;
             }
@@ -152,7 +152,7 @@ public final class BlockStatePaletteUnpacker {
         }
 
         long[] mask = new long[VoxelSection.MASK_WORDS];
-        short[] ids = new short[VoxelSection.VOXEL_COUNT];
+        int[] ids = new int[VoxelSection.VOXEL_COUNT];
         int solidCount = 0;
 
         int bitsPerBlock = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteIds.length - 1));
@@ -171,7 +171,7 @@ public final class BlockStatePaletteUnpacker {
                     throw new IllegalStateException("Palette index " + paletteIndex + " exceeds palette size " + paletteIds.length);
                 }
 
-                short blockId = paletteIds[paletteIndex];
+                int blockId = paletteIds[paletteIndex];
                 ids[voxelIdx] = blockId;
 
                 if (blockId != BlockIdRegistry.AIR_ID) {
@@ -190,11 +190,11 @@ public final class BlockStatePaletteUnpacker {
         return new VoxelSection(mask, ids, solidCount, fullCubes);
     }
 
-    private static boolean checkAllFullCubes(short[] paletteIds, ShapeRegistry shapeRegistry) {
+    private static boolean checkAllFullCubes(int[] paletteIds, ShapeRegistry shapeRegistry) {
         if (shapeRegistry == null) {
             return false;
         }
-        for (short pid : paletteIds) {
+        for (int pid : paletteIds) {
             if (pid != BlockIdRegistry.AIR_ID && !shapeRegistry.getShape(pid).isFullCube()) {
                 return false;
             }

@@ -24,10 +24,10 @@ public final class VoxelSection {
     public static final VoxelSection EMPTY = new VoxelSection();
 
     private final long[] bitmask;
-    private short[] blockIds;
+    private int[] blockIds;
     private int solidCount;
     private final boolean isHomogeneous;
-    private final short singleBlockId;
+    private final int singleBlockId;
     private boolean allSolidAreFullCubes;
 
     /**
@@ -35,7 +35,7 @@ public final class VoxelSection {
      */
     public VoxelSection() {
         this.bitmask = new long[MASK_WORDS];
-        this.blockIds = new short[VOXEL_COUNT];
+        this.blockIds = new int[VOXEL_COUNT];
         this.solidCount = 0;
         this.isHomogeneous = false;
         this.singleBlockId = 0;
@@ -46,10 +46,10 @@ public final class VoxelSection {
      * Constructs a VoxelSection with precomputed bitmask, block ID array, and solid count.
      *
      * @param mask       Occupancy bitmask (exactly 64 longs)
-     * @param blockIds   Block identifier array (exactly 4096 shorts)
+     * @param blockIds   Block identifier array (exactly 4096 ints)
      * @param solidCount Number of non-air voxels
      */
-    public VoxelSection(long[] mask, short[] blockIds, int solidCount) {
+    public VoxelSection(long[] mask, int[] blockIds, int solidCount) {
         this(mask, blockIds, solidCount, false);
     }
 
@@ -57,18 +57,18 @@ public final class VoxelSection {
      * Constructs a VoxelSection with precomputed bitmask, block ID array, solid count, and full-cube flag.
      *
      * @param mask                 Occupancy bitmask (exactly 64 longs)
-     * @param blockIds             Block identifier array (exactly 4096 shorts)
+     * @param blockIds             Block identifier array (exactly 4096 ints)
      * @param solidCount           Number of non-air voxels
      * @param allSolidAreFullCubes True if all solid voxels in this section are 1x1x1 full cubes
      */
-    public VoxelSection(long[] mask, short[] blockIds, int solidCount, boolean allSolidAreFullCubes) {
+    public VoxelSection(long[] mask, int[] blockIds, int solidCount, boolean allSolidAreFullCubes) {
         this.bitmask = Objects.requireNonNull(mask, "Bitmask cannot be null");
         if (mask.length != MASK_WORDS) {
             throw new IllegalArgumentException("Bitmask must be exactly 64 longs (512 bytes), got: " + mask.length);
         }
         this.blockIds = Objects.requireNonNull(blockIds, "BlockIds array cannot be null");
         if (blockIds.length != VOXEL_COUNT) {
-            throw new IllegalArgumentException("BlockIds array must be exactly 4096 shorts, got: " + blockIds.length);
+            throw new IllegalArgumentException("BlockIds array must be exactly 4096 ints, got: " + blockIds.length);
         }
         this.solidCount = solidCount;
         this.isHomogeneous = false;
@@ -84,7 +84,7 @@ public final class VoxelSection {
      * @param solidCount           Solid voxel count (usually 4096)
      * @param allSolidAreFullCubes True if uniform block is full cube
      */
-    public VoxelSection(long[] mask, short singleBlockId, int solidCount, boolean allSolidAreFullCubes) {
+    public VoxelSection(long[] mask, int singleBlockId, int solidCount, boolean allSolidAreFullCubes) {
         this.bitmask = Objects.requireNonNull(mask, "Bitmask cannot be null");
         this.blockIds = null;
         this.isHomogeneous = true;
@@ -100,7 +100,7 @@ public final class VoxelSection {
      * @param allSolidAreFullCubes True if block shape is a full cube
      * @return Compact VoxelSection
      */
-    public static VoxelSection createHomogeneous(short blockId, boolean allSolidAreFullCubes) {
+    public static VoxelSection createHomogeneous(int blockId, boolean allSolidAreFullCubes) {
         if (blockId == BlockIdRegistry.AIR_ID) {
             return EMPTY;
         }
@@ -137,14 +137,14 @@ public final class VoxelSection {
     }
 
     /**
-     * Retrieves the 16-bit numeric block ID of a local voxel.
+     * Retrieves the 32-bit numeric block ID of a local voxel.
      *
      * @param x Local X coordinate [0..15]
      * @param y Local Y coordinate [0..15]
      * @param z Local Z coordinate [0..15]
-     * @return 16-bit block ID
+     * @return 32-bit block ID
      */
-    public short getBlockId(int x, int y, int z) {
+    public int getBlockId(int x, int y, int z) {
         if (isHomogeneous) {
             return singleBlockId;
         }
@@ -158,9 +158,9 @@ public final class VoxelSection {
      * @param y       Local Y coordinate [0..15]
      * @param z       Local Z coordinate [0..15]
      * @param solid   True if solid
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      */
-    public void setVoxel(int x, int y, int z, boolean solid, short blockId) {
+    public void setVoxel(int x, int y, int z, boolean solid, int blockId) {
         if (isHomogeneous) {
             throw new UnsupportedOperationException("Cannot modify an immutable homogeneous VoxelSection");
         }
@@ -215,7 +215,7 @@ public final class VoxelSection {
      *
      * @return Single uniform block ID, or 0
      */
-    public short getSingleBlockId() {
+    public int getSingleBlockId() {
         return singleBlockId;
     }
 
@@ -259,12 +259,12 @@ public final class VoxelSection {
      * Returns the raw block ID array.
      * If this section is homogeneous, lazily expands the compact singleBlockId into an array.
      *
-     * @return Array of 4096 shorts
+     * @return Array of 4096 ints
      */
-    public short[] getBlockIds() {
+    public int[] getBlockIds() {
         if (isHomogeneous) {
             if (blockIds == null) {
-                short[] ids = new short[VOXEL_COUNT];
+                int[] ids = new int[VOXEL_COUNT];
                 Arrays.fill(ids, singleBlockId);
                 this.blockIds = ids;
             }
@@ -280,7 +280,7 @@ public final class VoxelSection {
             throw new UnsupportedOperationException("Cannot clear an immutable homogeneous VoxelSection");
         }
         Arrays.fill(bitmask, 0L);
-        Arrays.fill(blockIds, (short) 0);
+        Arrays.fill(blockIds, 0);
         this.solidCount = 0;
         this.allSolidAreFullCubes = true;
     }
@@ -289,10 +289,10 @@ public final class VoxelSection {
      * Bulk populates this section with precomputed bitmask, block IDs, and solid count.
      *
      * @param mask       Occupancy bitmask (64 longs)
-     * @param blockIds   Block identifier array (4096 shorts)
+     * @param blockIds   Block identifier array (4096 ints)
      * @param solidCount Number of solid voxels
      */
-    public void populate(long[] mask, short[] blockIds, int solidCount) {
+    public void populate(long[] mask, int[] blockIds, int solidCount) {
         if (isHomogeneous) {
             throw new UnsupportedOperationException("Cannot populate an immutable homogeneous VoxelSection");
         }
@@ -322,7 +322,7 @@ public final class VoxelSection {
         if (isHomogeneous) {
             return new VoxelSection(maskCopy, singleBlockId, solidCount, allSolidAreFullCubes);
         }
-        short[] idsCopy = Arrays.copyOf(blockIds, blockIds.length);
+        int[] idsCopy = Arrays.copyOf(blockIds, blockIds.length);
         return new VoxelSection(maskCopy, idsCopy, solidCount, allSolidAreFullCubes);
     }
 }

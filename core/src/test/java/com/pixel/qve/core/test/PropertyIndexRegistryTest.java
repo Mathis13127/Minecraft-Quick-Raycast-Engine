@@ -95,7 +95,7 @@ public class PropertyIndexRegistryTest {
         short northVal = registry.getOrRegisterValue(facingKey, "north");
         short topVal = registry.getOrRegisterValue(halfKey, "top");
 
-        short blockId = 42;
+        int blockId = 42;
         short[] pairs = new short[]{facingKey, northVal, halfKey, topVal};
         registry.registerBlockProperties(blockId, pairs);
 
@@ -121,7 +121,7 @@ public class PropertyIndexRegistryTest {
         BlockIdRegistry blockRegistry = new BlockIdRegistry();
         BlockStateDictionary dictionary = blockRegistry.getStateDictionary();
 
-        short stairsId = blockRegistry.getOrRegister("minecraft:oak_stairs[facing=south,half=top,waterlogged=false]");
+        int stairsId = blockRegistry.getOrRegister("minecraft:oak_stairs[facing=south,half=top,waterlogged=false]");
         dictionary.registerState(12345L, stairsId, "minecraft:oak_stairs[facing=south,half=top,waterlogged=false]");
 
         assertEquals("south", dictionary.getPropertyValueName(stairsId, "facing"));
@@ -134,7 +134,7 @@ public class PropertyIndexRegistryTest {
         assertEquals("[facing=south,half=top,waterlogged=false]", dictionary.formatProperties(stairsId));
 
         // Solid stone without properties
-        short stoneId = blockRegistry.getOrRegister("minecraft:stone");
+        int stoneId = blockRegistry.getOrRegister("minecraft:stone");
         dictionary.registerState(54321L, stoneId, "minecraft:stone");
 
         assertFalse(dictionary.hasProperty(stoneId, "facing"));

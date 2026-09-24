@@ -13,24 +13,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Thread-safe bidirectional registry mapping Minecraft block resource locations (e.g. "minecraft:stone")
- * to compact 16-bit numeric identifiers (short).
+ * to compact 32-bit numeric identifiers (int).
  * ID 0 is strictly reserved for non-solid air blocks.
  */
 public final class BlockIdRegistry {
 
     /** Numeric identifier reserved for non-solid air (0). */
-    public static final short AIR_ID = 0;
+    public static final int AIR_ID = 0;
     /** Standard vanilla air identifier string. */
     public static final String AIR_NAME = "minecraft:air";
 
-    private final ConcurrentHashMap<String, Short> nameToId = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> nameToId = new ConcurrentHashMap<>();
     private final List<String> idToName = Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger nextId = new AtomicInteger(1);
 
     private static final int BYTE_HASH_TABLE_SIZE = 2048;
     private static final int BYTE_HASH_TABLE_MASK = BYTE_HASH_TABLE_SIZE - 1;
     private final int[] byteHashKeys = new int[BYTE_HASH_TABLE_SIZE];
-    private final short[] byteHashValues = new short[BYTE_HASH_TABLE_SIZE];
+    private final int[] byteHashValues = new int[BYTE_HASH_TABLE_SIZE];
     private final long[] byteHashOccupied = new long[BYTE_HASH_TABLE_SIZE / 64];
     private final BlockStateDictionary stateDictionary;
 
@@ -62,9 +62,9 @@ public final class BlockIdRegistry {
      * @param buf    Direct or heap ByteBuffer
      * @param offset Byte offset of the UTF-8 string payload
      * @param length Number of UTF-8 bytes
-     * @return 16-bit short block identifier
+     * @return 32-bit integer block identifier
      */
-    public short getOrRegisterFromBytes(java.nio.ByteBuffer buf, int offset, int length) {
+    public int getOrRegisterFromBytes(java.nio.ByteBuffer buf, int offset, int length) {
         int hash = com.pixel.qve.mca.FastNbtReader.hashBytes(buf, offset, length);
         int slot = (hash ^ (hash >>> 16)) & BYTE_HASH_TABLE_MASK;
         int wordIdx = slot >>> 6;
@@ -76,7 +76,7 @@ public final class BlockIdRegistry {
 
         // Cache miss: resolve String representation once, register, and populate cache
         String name = com.pixel.qve.mca.FastNbtReader.decodeStringDirect(buf, offset, length);
-        short id = getOrRegister(name);
+        int id = getOrRegister(name);
 
         synchronized (this) {
             byteHashKeys[slot] = hash;
@@ -91,11 +91,11 @@ public final class BlockIdRegistry {
      * Resolves an existing block ID or registers a new identifier atomically.
      *
      * @param blockName Resource location string (e.g. "minecraft:grass_block")
-     * @return 16-bit short block identifier
+     * @return 32-bit integer block identifier
      */
-    public short getOrRegister(String blockName) {
+    public int getOrRegister(String blockName) {
         Objects.requireNonNull(blockName, "Block name cannot be null");
-        Short existing = nameToId.get(blockName);
+        Integer existing = nameToId.get(blockName);
         if (existing != null) {
             return existing;
         }
@@ -106,12 +106,11 @@ public final class BlockIdRegistry {
                 return existing;
             }
 
-            int idInt = nextId.getAndIncrement();
-            if (idInt > Short.MAX_VALUE) {
-                throw new IllegalStateException("BlockIdRegistry exhausted: exceeded maximum of " + Short.MAX_VALUE + " unique blocks");
+            int id = nextId.getAndIncrement();
+            if (id < 0) {
+                throw new IllegalStateException("BlockIdRegistry exhausted: exceeded integer capacity");
             }
 
-            short id = (short) idInt;
             idToName.add(blockName);
             nameToId.put(blockName, id);
             return id;
@@ -121,16 +120,15 @@ public final class BlockIdRegistry {
     /**
      * Resolves the block resource name associated with a numeric ID.
      *
-     * @param blockId 16-bit numeric ID
+     * @param blockId 32-bit numeric ID
      * @return Block name, or "minecraft:air" if 0, or null if unregistered
      */
-    public String getName(short blockId) {
+    public String getName(int blockId) {
         if (blockId == AIR_ID) {
             return AIR_NAME;
         }
-        int index = blockId & 0xFFFF;
-        if (index >= 0 && index < idToName.size()) {
-            return idToName.get(index);
+        if (blockId >= 0 && blockId < idToName.size()) {
+            return idToName.get(blockId);
         }
         return null;
     }
@@ -138,10 +136,10 @@ public final class BlockIdRegistry {
     /**
      * Checks if the given numeric ID corresponds to an air (non-solid) block.
      *
-     * @param blockId 16-bit block ID to check
+     * @param blockId 32-bit block ID to check
      * @return True if air (ID 0)
      */
-     public static boolean isAir(short blockId) {
+     public static boolean isAir(int blockId) {
          return blockId == AIR_ID;
      }
 

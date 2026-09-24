@@ -174,9 +174,9 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param worldY  Absolute block world Y coordinate
      * @param worldZ  Absolute block world Z coordinate
      * @param solid   True if voxel is solid matter
-     * @param blockId 16-bit block type identifier
+     * @param blockId 32-bit block type identifier
      */
-    public void setVoxel(int worldX, int worldY, int worldZ, boolean solid, short blockId) {
+    public void setVoxel(int worldX, int worldY, int worldZ, boolean solid, int blockId) {
         int chunkX = worldX >> 4;
         int chunkZ = worldZ >> 4;
         long cKey = chunkKey(chunkX, chunkZ);

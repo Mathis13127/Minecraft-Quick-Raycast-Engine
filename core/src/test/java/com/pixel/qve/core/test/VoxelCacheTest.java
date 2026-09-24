@@ -65,7 +65,7 @@ public class VoxelCacheTest {
     @DisplayName("UnifiedVoxelCache seamlessly falls back to disk provider on cache miss")
     void testUnifiedVoxelCacheDiskFallback() {
         BlockIdRegistry registry = new BlockIdRegistry();
-        short stoneId = registry.getOrRegister("minecraft:stone");
+        int stoneId = registry.getOrRegister("minecraft:stone");
 
         // Create a simulated disk fallback
         IVoxelGrid diskFallback = new IVoxelGrid() {
@@ -101,7 +101,7 @@ public class VoxelCacheTest {
     @DisplayName("Lock-Free Concurrency: 8 readers raycasting while 2 writers mutate voxels")
     void testLockFreeConcurrency() throws InterruptedException {
         BlockIdRegistry registry = new BlockIdRegistry();
-        short dirtId = registry.getOrRegister("minecraft:dirt");
+        int dirtId = registry.getOrRegister("minecraft:dirt");
         UnifiedVoxelCache cache = new UnifiedVoxelCache(registry);
 
         // Prepopulate some terrain
@@ -151,7 +151,7 @@ public class VoxelCacheTest {
                         int x = (id * 13 + step) & 63;
                         int z = (id * 17 + step) & 63;
                         boolean solid = (step % 2) == 0;
-                        cache.setVoxel(x, 10, z, solid, solid ? dirtId : (short) 0);
+                        cache.setVoxel(x, 10, z, solid, solid ? dirtId : 0);
                         totalMutations.incrementAndGet();
                         step++;
                         Thread.yield();

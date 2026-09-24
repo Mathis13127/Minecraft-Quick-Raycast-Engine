@@ -66,7 +66,7 @@ public final class VoxelDDA {
             int z0 = (int) Math.floor(startZ);
             VoxelSection sec0 = grid.getSection(x0 >> 4, y0 >> 4, z0 >> 4);
             if (sec0 != null && !sec0.isEmpty() && sec0.isSolid(x0 & 15, y0 & 15, z0 & 15)) {
-                short blockId = sec0.getBlockId(x0 & 15, y0 & 15, z0 & 15);
+                int blockId = sec0.getBlockId(x0 & 15, y0 & 15, z0 & 15);
                 com.pixel.qve.state.SubBox.SubBoxHit subHit0 = new com.pixel.qve.state.SubBox.SubBoxHit();
                 return evaluateVoxelHit(startX, startY, startZ, 0, 0, 0, x0, y0, z0, 0.0, 0.0, VoxelFace.NONE, blockId, grid, subHit0, result);
             }
@@ -513,14 +513,14 @@ public final class VoxelDDA {
                                     com.pixel.qve.state.SubBox.SubBoxHit subHit,
                                     RayHitResult result) {
         if (section.allSolidAreFullCubes()) {
-            short blockId = section.getBlockId(x & 15, y & 15, z & 15);
+            int blockId = section.getBlockId(x & 15, y & 15, z & 15);
             double hitX = startX + tEntry * dirX;
             double hitY = startY + tEntry * dirY;
             double hitZ = startZ + tEntry * dirZ;
             result.set(true, hitX, hitY, hitZ, x, y, z, face, blockId, tEntry);
             return true;
         }
-        short blockId = section.getBlockId(x & 15, y & 15, z & 15);
+        int blockId = section.getBlockId(x & 15, y & 15, z & 15);
         double tExit = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
         return evaluateVoxelHit(startX, startY, startZ, dirX, dirY, dirZ, x, y, z, tEntry, tExit, face, blockId, grid, subHit, result);
     }
@@ -530,7 +530,7 @@ public final class VoxelDDA {
                                            int x, int y, int z,
                                            double tEntry, double tExit,
                                            VoxelFace entryFace,
-                                           short blockId,
+                                           int blockId,
                                            IVoxelWorld grid,
                                            com.pixel.qve.state.SubBox.SubBoxHit subHitOut,
                                            RayHitResult result) {

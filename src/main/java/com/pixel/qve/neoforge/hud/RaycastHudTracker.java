@@ -252,7 +252,7 @@ public final class RaycastHudTracker {
 
                 Component message;
                 if (hit.isHit()) {
-                    short blockId = hit.getBlockId();
+                    int blockId = hit.getBlockId();
                     String blockName = MinecraftVoxelBridge.getBlockRegistry().getName(blockId);
                     if (blockName == null || blockName.isEmpty()) {
                         blockName = "unknown";

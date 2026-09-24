@@ -51,44 +51,44 @@ public class MinecraftVoxelBridgeTest {
 
         // Stone should be a solid block and full cube
         BlockState stoneState = Blocks.STONE.defaultBlockState();
-        short stoneId = MinecraftVoxelBridge.getBlockId(stoneState);
+        int stoneId = MinecraftVoxelBridge.getBlockId(stoneState);
         assertNotEquals(BlockIdRegistry.AIR_ID, stoneId);
         assertEquals(VoxelShape.FULL_CUBE, MinecraftVoxelBridge.getShapeRegistry().getShape(stoneId));
 
         // Bottom Slab
         BlockState bottomSlab = Blocks.OAK_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.BOTTOM);
-        short bottomSlabId = MinecraftVoxelBridge.getBlockId(bottomSlab);
+        int bottomSlabId = MinecraftVoxelBridge.getBlockId(bottomSlab);
         assertNotEquals(BlockIdRegistry.AIR_ID, bottomSlabId);
         assertEquals(VoxelShape.SLAB_BOTTOM, MinecraftVoxelBridge.getShapeRegistry().getShape(bottomSlabId));
 
         // Top Slab
         BlockState topSlab = Blocks.OAK_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP);
-        short topSlabId = MinecraftVoxelBridge.getBlockId(topSlab);
+        int topSlabId = MinecraftVoxelBridge.getBlockId(topSlab);
         assertNotEquals(bottomSlabId, topSlabId);
         assertEquals(VoxelShape.SLAB_TOP, MinecraftVoxelBridge.getShapeRegistry().getShape(topSlabId));
 
         // Double Slab should be full cube
         BlockState doubleSlab = Blocks.OAK_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE);
-        short doubleSlabId = MinecraftVoxelBridge.getBlockId(doubleSlab);
+        int doubleSlabId = MinecraftVoxelBridge.getBlockId(doubleSlab);
         assertEquals(VoxelShape.FULL_CUBE, MinecraftVoxelBridge.getShapeRegistry().getShape(doubleSlabId));
 
         // Stairs North Bottom
         BlockState stairsNorthBottom = Blocks.OAK_STAIRS.defaultBlockState()
                 .setValue(StairBlock.FACING, Direction.NORTH)
                 .setValue(StairBlock.HALF, Half.BOTTOM);
-        short stairsId = MinecraftVoxelBridge.getBlockId(stairsNorthBottom);
+        int stairsId = MinecraftVoxelBridge.getBlockId(stairsNorthBottom);
         assertEquals(VoxelShape.STAIRS_NORTH_BOTTOM, MinecraftVoxelBridge.getShapeRegistry().getShape(stairsId));
 
         // Iron Bars
         BlockState ironBars = Blocks.IRON_BARS.defaultBlockState();
-        short barsId = MinecraftVoxelBridge.getBlockId(ironBars);
+        int barsId = MinecraftVoxelBridge.getBlockId(ironBars);
         VoxelShape barsShape = MinecraftVoxelBridge.getShapeRegistry().getShape(barsId);
         assertNotNull(barsShape);
         assertFalse(barsShape.isFullCube());
 
         // Trapdoor Bottom
         BlockState trapdoor = Blocks.OAK_TRAPDOOR.defaultBlockState().setValue(TrapDoorBlock.HALF, Half.BOTTOM);
-        short trapdoorId = MinecraftVoxelBridge.getBlockId(trapdoor);
+        int trapdoorId = MinecraftVoxelBridge.getBlockId(trapdoor);
         assertEquals(VoxelShape.TRAPDOOR_BOTTOM, MinecraftVoxelBridge.getShapeRegistry().getShape(trapdoorId));
     }
 
@@ -117,14 +117,14 @@ public class MinecraftVoxelBridgeTest {
 
         // Initially empty
         assertFalse(section.isSolid(3, 7, 5));
-        assertEquals((short) 0, section.getBlockId(3, 7, 5));
+        assertEquals(0, section.getBlockId(3, 7, 5));
 
         // Place Stone block at (3, 7, 5) -> World Y = (4 << 4) | 7 = 71
         BlockState stone = Blocks.STONE.defaultBlockState();
         MinecraftVoxelBridge.onBlockStateChanged(dummy, 3, 7, 5, stone);
 
         assertTrue(section.isSolid(3, 7, 5));
-        short stoneId = MinecraftVoxelBridge.getBlockId(stone);
+        int stoneId = MinecraftVoxelBridge.getBlockId(stone);
         assertEquals(stoneId, section.getBlockId(3, 7, 5));
         assertEquals((short) 71, column.getHeightmap().getHeight(3, 5));
         assertEquals((short) 71, column.getHeightmap().getHighestY());

@@ -28,14 +28,15 @@ public final class ShapeRegistry {
     }
 
     /**
-     * Associates a 16-bit block ID with a specific sub-box collision shape.
+     * Associates a 32-bit block ID with a specific sub-box collision shape.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @param shape   VoxelShape collision model
      */
-    public synchronized void registerShape(short blockId, VoxelShape shape) {
+    public synchronized void registerShape(int blockId, VoxelShape shape) {
         Objects.requireNonNull(shape, "VoxelShape cannot be null");
-        int index = blockId & 0xFFFF;
+        if (blockId < 0) return;
+        int index = blockId;
         ensureCapacity(index + 1);
         shapes[index] = shape;
         isFullCube[index] = shape.isFullCube();
@@ -45,16 +46,16 @@ public final class ShapeRegistry {
      * Fast-path check: returns whether a block ID has a full 1x1x1 cube collision shape
      * in a single CPU cycle, bypassing VoxelShape object inspection.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return True if the block is a solid full cube
      */
-    public boolean isFullCube(short blockId) {
+    public boolean isFullCube(int blockId) {
         if (blockId == BlockIdRegistry.AIR_ID) {
             return false;
         }
-        int index = blockId & 0xFFFF;
+        int index = blockId;
         boolean[] local = this.isFullCube;
-        if (index < local.length) {
+        if (index >= 0 && index < local.length) {
             return local[index];
         }
         return true; // Unmapped blocks default to full cube
@@ -63,16 +64,16 @@ public final class ShapeRegistry {
     /**
      * Retrieves the collision shape for a given block ID.
      *
-     * @param blockId 16-bit block ID
+     * @param blockId 32-bit block ID
      * @return Associated VoxelShape, or FULL_CUBE if unmapped
      */
-    public VoxelShape getShape(short blockId) {
+    public VoxelShape getShape(int blockId) {
         if (blockId == BlockIdRegistry.AIR_ID) {
             return VoxelShape.EMPTY;
         }
-        int index = blockId & 0xFFFF;
+        int index = blockId;
         VoxelShape[] localShapes = this.shapes;
-        if (index < localShapes.length) {
+        if (index >= 0 && index < localShapes.length) {
             VoxelShape shape = localShapes[index];
             return (shape != null) ? shape : VoxelShape.FULL_CUBE;
         }
@@ -85,7 +86,7 @@ public final class ShapeRegistry {
      * @param blockRegistry Source BlockIdRegistry to inspect
      */
     public void registerDefaultVanillaShapes(BlockIdRegistry blockRegistry) {
-        for (short id = 1; id < blockRegistry.size(); id++) {
+        for (int id = 1; id < blockRegistry.size(); id++) {
             String name = blockRegistry.getName(id);
             if (name == null) continue;
 

@@ -28,7 +28,7 @@ public final class RayHitResult {
     /** Struck voxel face boundary. */
     public VoxelFace face;
     /** Numeric block identifier struck. */
-    public short blockId;
+    public int blockId;
     /** Distance traveled along the ray to the impact point. */
     public double distance;
 
@@ -66,12 +66,12 @@ public final class RayHitResult {
      * @param blockY   Struck block integer Y
      * @param blockZ   Struck block integer Z
      * @param face     Struck voxel boundary face
-     * @param blockId  16-bit block type identifier
+     * @param blockId  32-bit block type identifier
      * @param distance Distance traveled along the ray
      */
     public void set(boolean hit, double hitX, double hitY, double hitZ,
                     int blockX, int blockY, int blockZ,
-                    VoxelFace face, short blockId, double distance) {
+                    VoxelFace face, int blockId, double distance) {
         this.hit = hit;
         this.hitX = hitX;
         this.hitY = hitY;
@@ -159,9 +159,9 @@ public final class RayHitResult {
     /**
      * Gets the numeric block identifier of the struck voxel.
      *
-     * @return 16-bit numeric block ID
+     * @return 32-bit numeric block ID
      */
-    public short getBlockId() {
+    public int getBlockId() {
         return blockId;
     }
 

@@ -135,9 +135,9 @@ public final class VoxelChunkColumn {
      * @param worldY Absolute block altitude
      * @param localZ Coordinate in [0..15]
      * @param solid  True if the voxel is solid matter
-     * @param blockId 16-bit block type identifier
+     * @param blockId 32-bit block type identifier
      */
-    public void setVoxel(int localX, int worldY, int localZ, boolean solid, short blockId) {
+    public void setVoxel(int localX, int worldY, int localZ, boolean solid, int blockId) {
         int sectionY = worldY >> 4;
         int localY = worldY & 15;
         int index = sectionY - minSectionY;

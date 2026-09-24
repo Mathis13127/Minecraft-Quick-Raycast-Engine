@@ -46,9 +46,9 @@ public interface IVoxelWorld {
      * @param worldX Absolute world X coordinate
      * @param worldY Absolute world Y coordinate
      * @param worldZ Absolute world Z coordinate
-     * @return 16-bit numeric block identifier, or 0 if air or unloaded
+     * @return 32-bit numeric block identifier, or 0 if air or unloaded
      */
-    default short getBlockId(int worldX, int worldY, int worldZ) {
+    default int getBlockId(int worldX, int worldY, int worldZ) {
         int sx = worldX >> 4;
         int sy = worldY >> 4;
         int sz = worldZ >> 4;

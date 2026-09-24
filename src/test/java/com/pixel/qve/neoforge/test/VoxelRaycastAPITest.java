@@ -61,7 +61,7 @@ public class VoxelRaycastAPITest {
     void testMockGridRaycast() {
         UnifiedVoxelCache cache = new UnifiedVoxelCache(MinecraftVoxelBridge.getBlockRegistry(), MinecraftVoxelBridge.getShapeRegistry(), null, -4, 20);
         VoxelChunkColumn column = cache.getOrCreateColumn(0, 0);
-        short stoneId = MinecraftVoxelBridge.getBlockId(Blocks.STONE.defaultBlockState());
+        int stoneId = MinecraftVoxelBridge.getBlockId(Blocks.STONE.defaultBlockState());
         cache.setVoxel(5, 69, 5, true, stoneId);
 
         // Verify ray striking the stone block

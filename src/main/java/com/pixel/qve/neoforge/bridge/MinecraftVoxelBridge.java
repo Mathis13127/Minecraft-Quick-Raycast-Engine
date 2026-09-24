@@ -43,8 +43,8 @@ public final class MinecraftVoxelBridge {
 
     private static final BlockIdRegistry BLOCK_REGISTRY = new BlockIdRegistry();
     private static final ShapeRegistry SHAPE_REGISTRY = new ShapeRegistry();
-    private static final Map<BlockState, Short> STATE_TO_ID = new ConcurrentHashMap<>();
-    private static volatile short[] STATE_ID_ARRAY = new short[16384];
+    private static final Map<BlockState, Integer> STATE_TO_ID = new ConcurrentHashMap<>();
+    private static volatile int[] STATE_ID_ARRAY = new int[32768];
     private static final Map<ResourceKey<Level>, MinecraftVoxelGrid> WORLD_GRIDS = new ConcurrentHashMap<>();
 
     private MinecraftVoxelBridge() {}
@@ -68,28 +68,28 @@ public final class MinecraftVoxelBridge {
     }
 
     /**
-     * Resolves the compact 16-bit block identifier for a Minecraft BlockState in ~1 CPU cycle.
+     * Resolves the compact 32-bit block identifier for a Minecraft BlockState in ~1 CPU cycle.
      * Uses direct dense array indexing from Block.getId(state), bypassing hash map lookups.
      *
      * @param state The vanilla BlockState
-     * @return 16-bit numeric block ID (0 for air)
+     * @return 32-bit numeric block ID (0 for air)
      */
-    public static short getBlockId(BlockState state) {
+    public static int getBlockId(BlockState state) {
         if (state == null || state.isAir()) {
             return BlockIdRegistry.AIR_ID;
         }
 
         int stateId = Block.getId(state);
         if (stateId > 0) {
-            short[] arr = STATE_ID_ARRAY;
+            int[] arr = STATE_ID_ARRAY;
             if (stateId < arr.length) {
-                short id = arr[stateId];
+                int id = arr[stateId];
                 if (id != 0) {
                     return id;
                 }
             }
         } else {
-            Short mapped = STATE_TO_ID.get(state);
+            Integer mapped = STATE_TO_ID.get(state);
             if (mapped != null) {
                 return mapped;
             }
@@ -98,17 +98,17 @@ public final class MinecraftVoxelBridge {
         return registerBlockState(state, stateId);
     }
 
-    private static synchronized short registerBlockState(BlockState state, int stateId) {
+    private static synchronized int registerBlockState(BlockState state, int stateId) {
         if (stateId > 0) {
-            short[] arr = STATE_ID_ARRAY;
+            int[] arr = STATE_ID_ARRAY;
             if (stateId < arr.length) {
-                short existing = arr[stateId];
+                int existing = arr[stateId];
                 if (existing != 0) {
                     return existing;
                 }
             }
         } else {
-            Short mapped = STATE_TO_ID.get(state);
+            Integer mapped = STATE_TO_ID.get(state);
             if (mapped != null) {
                 return mapped;
             }
@@ -117,7 +117,7 @@ public final class MinecraftVoxelBridge {
         Block block = state.getBlock();
         String fullStateKey = state.toString();
 
-        short id = BLOCK_REGISTRY.getOrRegister(fullStateKey);
+        int id = BLOCK_REGISTRY.getOrRegister(fullStateKey);
         VoxelShape shape = resolveShapeForState(state, block);
         if (shape != VoxelShape.FULL_CUBE) {
             SHAPE_REGISTRY.registerShape(id, shape);
@@ -143,10 +143,10 @@ public final class MinecraftVoxelBridge {
         }
 
         if (stateId > 0) {
-            short[] arr = STATE_ID_ARRAY;
+            int[] arr = STATE_ID_ARRAY;
             if (stateId >= arr.length) {
                 int newCap = Math.max(arr.length * 2, stateId + 1024);
-                short[] newArr = java.util.Arrays.copyOf(arr, newCap);
+                int[] newArr = java.util.Arrays.copyOf(arr, newCap);
                 newArr[stateId] = id;
                 STATE_ID_ARRAY = newArr;
             } else {
@@ -162,7 +162,7 @@ public final class MinecraftVoxelBridge {
         BLOCK_REGISTRY.getStateDictionary().setRegistrationListener(MinecraftVoxelBridge::onStateDiscovered);
     }
 
-    private static void onStateDiscovered(short blockId, String canonicalState) {
+    private static void onStateDiscovered(int blockId, String canonicalState) {
         if (canonicalState == null || canonicalState.isEmpty() || canonicalState.equals(BlockIdRegistry.AIR_NAME)) {
             return;
         }
@@ -324,7 +324,7 @@ public final class MinecraftVoxelBridge {
                 for (int x = 0; x < 16; x++) {
                     BlockState state = vanillaSection.getBlockState(x, y, z);
                     if (!state.isAir()) {
-                        short id = getBlockId(state);
+                        int id = getBlockId(state);
                         compiled.setVoxel(x, y, z, true, id);
                         if (allFullCubes && !SHAPE_REGISTRY.getShape(id).isFullCube()) {
                             allFullCubes = false;
@@ -370,7 +370,7 @@ public final class MinecraftVoxelBridge {
                     }
                 }
                 boolean solid = !newState.isAir();
-                short blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
+                int blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
                 voxelSection.setVoxel(localX, localY, localZ, solid, blockId);
                 if (solid && !SHAPE_REGISTRY.getShape(blockId).isFullCube()) {
                     voxelSection.setAllSolidAreFullCubes(false);
