@@ -7,11 +7,13 @@ import com.pixel.raycast.core.shape.ShapeRegistry;
 import com.pixel.raycast.core.voxel.Heightmap2D;
 import com.pixel.raycast.core.voxel.VoxelSection;
 import net.minecraft.server.level.ServerChunkCache;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.util.Objects;
 
@@ -53,6 +55,32 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         return cache;
     }
 
+    /**
+     * Retrieves a LevelChunk without risking server thread deadlocks when called
+     * from background raycast worker threads.
+     */
+    private LevelChunk getChunkSafe(int chunkX, int chunkZ) {
+        if (level instanceof ServerLevel serverLevel) {
+            ServerChunkCache scc = serverLevel.getChunkSource();
+            if (Thread.currentThread() == serverLevel.getServer().getRunningThread()) {
+                ChunkAccess ca = scc.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+                if (ca instanceof LevelChunk lc) {
+                    return lc;
+                }
+            } else {
+                // Background worker thread: NEVER call scc.getChunk() which dispatches to mainThreadProcessor
+                // and deadlocks if the main server thread is waiting on latch.await()!
+                return scc.getChunkNow(chunkX, chunkZ);
+            }
+        } else {
+            ChunkAccess ca = level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+            if (ca instanceof LevelChunk lc) {
+                return lc;
+            }
+        }
+        return null;
+    }
+
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
         // 1. Check in-memory VoxelCache columns first (lock-free)
@@ -65,14 +93,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         }
 
         // 2. Check if chunk is loaded in live Minecraft memory (RAM)
-        LevelChunk chunk = null;
-        ChunkAccess ca = level.getChunk(sectionX, sectionZ, ChunkStatus.FULL, false);
-        if (ca instanceof LevelChunk lc) {
-            chunk = lc;
-        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
-            chunk = scc.getChunkNow(sectionX, sectionZ);
-        }
-
+        LevelChunk chunk = getChunkSafe(sectionX, sectionZ);
         if (chunk != null) {
             int blockY = sectionY << 4;
             if (!level.isOutsideBuildHeight(blockY)) {
@@ -106,16 +127,14 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
             return col;
         }
 
-        LevelChunk chunk = null;
-        ChunkAccess ca = level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-        if (ca instanceof LevelChunk lc) {
-            chunk = lc;
-        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
-            chunk = scc.getChunkNow(chunkX, chunkZ);
-        }
-
+        LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
             return cache.getOrCreateColumn(chunkX, chunkZ);
+        }
+
+        IVoxelGrid diskFallback = cache.getDiskFallback();
+        if (diskFallback != null) {
+            return diskFallback.getColumn(chunkX, chunkZ);
         }
 
         return null;
@@ -128,36 +147,28 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
             return hm;
         }
 
-        LevelChunk chunk = null;
-        ChunkAccess ca = level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-        if (ca instanceof LevelChunk lc) {
-            chunk = lc;
-        } else if (level.getChunkSource() instanceof ServerChunkCache scc) {
-            chunk = scc.getChunkNow(chunkX, chunkZ);
-        }
-
+        LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
             VoxelChunkColumn col = cache.getOrCreateColumn(chunkX, chunkZ);
             Heightmap2D colHm = col.getHeightmap();
             if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
-                LevelChunkSection[] sections = chunk.getSections();
-                for (int i = sections.length - 1; i >= 0; i--) {
-                    LevelChunkSection s = sections[i];
-                    if (s != null && !s.hasOnlyAir()) {
-                        int secY = chunk.getSectionYFromSectionIndex(i);
-                        short topY = (short) ((secY << 4) + 15);
-                        colHm.recomputeHighest();
-                        if (topY > colHm.getHighestY()) {
-                            colHm.setHeight(0, 0, topY);
-                        }
-                        break;
+                // Populate true heightmap using Minecraft's native LevelChunk motion-blocking heightmap
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        int h = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
+                        colHm.setHeight(x, z, (short) h);
                     }
                 }
             }
             return colHm;
         }
 
-        return hm;
+        IVoxelGrid diskFallback = cache.getDiskFallback();
+        if (diskFallback != null) {
+            return diskFallback.getHeightmap(chunkX, chunkZ);
+        }
+
+        return null;
     }
 
     @Override

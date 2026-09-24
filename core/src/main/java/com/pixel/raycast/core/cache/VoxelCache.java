@@ -29,7 +29,6 @@ public final class VoxelCache implements IVoxelGrid {
     private final int maxSectionY;
 
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
-    private static final Heightmap2D EMPTY_HEIGHTMAP = new Heightmap2D();
     private static final int L1_SIZE = 1024;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
@@ -230,7 +229,7 @@ public final class VoxelCache implements IVoxelGrid {
         if (diskFallback != null) {
             return diskFallback.getHeightmap(chunkX, chunkZ);
         }
-        return EMPTY_HEIGHTMAP;
+        return null;
     }
 
     @Override

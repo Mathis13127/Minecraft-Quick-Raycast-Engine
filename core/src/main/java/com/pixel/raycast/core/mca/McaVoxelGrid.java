@@ -20,35 +20,44 @@ public final class McaVoxelGrid implements IVoxelGrid {
 
     private final BlockIdRegistry registry;
     private final Map<Long, VoxelSection> sectionCache = new ConcurrentHashMap<>();
-    private static final int L1_SIZE = 2048;
-    private static final int L1_MASK = L1_SIZE - 1;
-    private final long[] l1SectionKeys = new long[L1_SIZE];
-    private final VoxelSection[] l1Sections = new VoxelSection[L1_SIZE];
     private final Map<Long, com.pixel.raycast.core.voxel.Heightmap2D> heightmaps = new ConcurrentHashMap<>();
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
     private final Path regionDirectory;
-    private short highestWorldY = Short.MIN_VALUE;
+    private final short minWorldY;
+    private volatile short highestWorldY = Short.MIN_VALUE;
 
     /**
-     * Constructs an McaVoxelGrid with an in-memory block registry.
+     * Constructs an McaVoxelGrid with an in-memory block registry and default min build height (-64).
      *
      * @param registry BlockIdRegistry to map block state names
      */
     public McaVoxelGrid(BlockIdRegistry registry) {
-        this(registry, null);
+        this(registry, null, (short) -64);
     }
 
     /**
-     * Constructs an McaVoxelGrid with an optional on-disk region directory for lazy-loading.
+     * Constructs an McaVoxelGrid with an optional on-disk region directory and default min build height (-64).
      *
      * @param registry        BlockIdRegistry to map block state names
      * @param regionDirectory Root directory containing .mca region files, or null
      */
     public McaVoxelGrid(BlockIdRegistry registry, Path regionDirectory) {
+        this(registry, regionDirectory, (short) -64);
+    }
+
+    /**
+     * Constructs an McaVoxelGrid with an optional on-disk region directory and dynamic min build height.
+     *
+     * @param registry        BlockIdRegistry to map block state names
+     * @param regionDirectory Root directory containing .mca region files, or null
+     * @param minWorldY       Minimum world build height (e.g. -64 for overworld, 0 for nether)
+     */
+    public McaVoxelGrid(BlockIdRegistry registry, Path regionDirectory, short minWorldY) {
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
         this.regionDirectory = regionDirectory;
+        this.minWorldY = minWorldY;
     }
 
     /**
@@ -203,36 +212,30 @@ public final class McaVoxelGrid implements IVoxelGrid {
         loadedChunks.add(cKey);
         int localCx = chunkX & 31;
         int localCz = chunkZ & 31;
-        return reader.readChunk(localCx, localCz, (sectionY, section) -> {
-            long key = sectionKey(chunkX, sectionY, chunkZ);
-            sectionCache.put(key, section);
-            if (section != null && !section.isEmpty()) {
-                long ck = chunkKey(chunkX, chunkZ);
-                com.pixel.raycast.core.voxel.Heightmap2D hm = heightmaps.computeIfAbsent(ck, k -> new com.pixel.raycast.core.voxel.Heightmap2D());
-                hm.updateFromSection(sectionY, section);
-                short h = hm.getHighestY();
-                if (h > highestWorldY) {
-                    highestWorldY = h;
+        synchronized (reader) {
+            return reader.readChunk(localCx, localCz, (sectionY, section) -> {
+                long key = sectionKey(chunkX, sectionY, chunkZ);
+                sectionCache.put(key, section);
+                if (section != null && !section.isEmpty()) {
+                    long ck = chunkKey(chunkX, chunkZ);
+                    com.pixel.raycast.core.voxel.Heightmap2D hm = heightmaps.computeIfAbsent(ck, k -> new com.pixel.raycast.core.voxel.Heightmap2D());
+                    synchronized (hm) {
+                        hm.updateFromSection(sectionY, section);
+                        short h = hm.getHighestY();
+                        if (h > highestWorldY) {
+                            highestWorldY = h;
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
         long key = sectionKey(sectionX, sectionY, sectionZ);
-        int slot = (int) ((key ^ (key >>> 22) ^ (key >>> 44)) & L1_MASK);
-        if (l1SectionKeys[slot] == key) {
-            VoxelSection s = l1Sections[slot];
-            if (s != null) {
-                return s;
-            }
-        }
-
         VoxelSection cached = sectionCache.get(key);
         if (cached != null) {
-            l1SectionKeys[slot] = key;
-            l1Sections[slot] = cached;
             return cached;
         }
 
@@ -253,12 +256,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
         if (regions.containsKey(rKey) || regionDirectory != null) {
             try {
                 loadChunk(sectionX, sectionZ);
-                VoxelSection loaded = sectionCache.get(key);
-                if (loaded != null) {
-                    l1SectionKeys[slot] = key;
-                    l1Sections[slot] = loaded;
-                }
-                return loaded;
+                return sectionCache.get(key);
             } catch (Exception e) {
                 LOGGER.log(System.Logger.Level.WARNING,
                         "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
@@ -272,7 +270,7 @@ public final class McaVoxelGrid implements IVoxelGrid {
 
     @Override
     public short getLowestWorldY() {
-        return -64;
+        return minWorldY;
     }
 
     /**
@@ -292,7 +290,5 @@ public final class McaVoxelGrid implements IVoxelGrid {
         heightmaps.clear();
         loadedChunks.clear();
         missingRegions.clear();
-        java.util.Arrays.fill(l1SectionKeys, 0L);
-        java.util.Arrays.fill(l1Sections, null);
     }
 }

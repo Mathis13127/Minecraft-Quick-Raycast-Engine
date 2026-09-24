@@ -148,7 +148,7 @@ public final class VoxelDDA {
                         double yEnd = startY + tEnd * dirY;
                         double minYInChunk = Math.min(yCurrent, yEnd);
 
-                        if (highestY == com.pixel.raycast.core.voxel.Heightmap2D.VOID_Y || minYInChunk >= (highestY + 1.0)) {
+                        if (currentHm.isAboveTerrain(minYInChunk)) {
                             if (exitChunkT > maxDist) {
                                 break;
                             }

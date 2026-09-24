@@ -123,7 +123,7 @@ public final class RaycastThreadPool {
             return;
         }
 
-        if (count <= threshold || WORKER_COUNT <= 1) {
+        if (count <= threshold || WORKER_COUNT <= 1 || Thread.currentThread().getName().startsWith("Phalanx-Raycast-Worker-")) {
             for (int i = startInclusive; i < endExclusive; i++) {
                 action.accept(i);
             }

@@ -252,7 +252,7 @@ public final class RaycastHudTracker {
                 if (hit.isHit()) {
                     String blockName = MinecraftVoxelBridge.getBlockRegistry().getName(hit.getBlockId());
                     if (blockName == null || blockName.isEmpty()) {
-                        blockName = "minecraft:stone";
+                        blockName = "unknown#id=" + hit.getBlockId();
                     }
                     message = Component.literal(String.format(
                             "§6Target: §b%s §8| §f[%d, %d, %d] §8(§e%.1fm§8) §8| §d%s §8| §a%s",

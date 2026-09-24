@@ -167,7 +167,7 @@ public final class MinecraftVoxelBridge {
                 Path dimFolder = net.minecraft.world.level.dimension.DimensionType.getStorageFolder(serverLevel.dimension(), rootPath);
                 Path regionDir = dimFolder.resolve("region");
                 if (Files.isDirectory(regionDir)) {
-                    diskFallback = new McaVoxelGrid(BLOCK_REGISTRY, regionDir);
+                    diskFallback = new McaVoxelGrid(BLOCK_REGISTRY, regionDir, (short) level.getMinBuildHeight());
                     LOGGER.info("Raycast Bridge: Connected Anvil disk fallback for dimension {} at {}",
                             level.dimension().location(), regionDir);
                 }

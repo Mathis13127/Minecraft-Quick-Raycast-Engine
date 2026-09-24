@@ -92,7 +92,7 @@ public interface IVoxelGrid {
      * @return Minimum world Y altitude containing solid blocks
      */
     default short getLowestWorldY() {
-        return (short) -64;
+        return Short.MIN_VALUE;
     }
 
     /**

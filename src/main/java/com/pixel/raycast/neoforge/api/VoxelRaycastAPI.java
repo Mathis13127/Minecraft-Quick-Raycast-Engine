@@ -159,6 +159,17 @@ public final class VoxelRaycastAPI {
      * @return Corresponding Minecraft Direction
      */
     public static Direction toDirection(VoxelFace face) {
+        return toDirection(face, Direction.UP);
+    }
+
+    /**
+     * Converts an internal VoxelFace into a Minecraft Direction with an explicit fallback for NONE.
+     *
+     * @param face     VoxelFace enum value
+     * @param fallback Direction to return if face is NONE (e.g. ray origin inside solid block)
+     * @return Corresponding Minecraft Direction
+     */
+    public static Direction toDirection(VoxelFace face, Direction fallback) {
         return switch (face) {
             case DOWN -> Direction.DOWN;
             case UP -> Direction.UP;
@@ -166,7 +177,7 @@ public final class VoxelRaycastAPI {
             case SOUTH -> Direction.SOUTH;
             case WEST -> Direction.WEST;
             case EAST -> Direction.EAST;
-            default -> Direction.UP;
+            case NONE -> fallback;
         };
     }
 }
