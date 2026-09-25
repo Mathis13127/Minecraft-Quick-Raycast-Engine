@@ -23,5 +23,8 @@ public enum WriteStatus {
     FAIL_IO_ERROR,
 
     /** Target world coordinates or dimension are invalid. */
-    FAIL_INVALID_COORDINATES
+    FAIL_INVALID_COORDINATES,
+
+    /** Chunk or region file does not exist on disk and creation policy forbids ex-nihilo creation. */
+    FAIL_CHUNK_NOT_FOUND
 }

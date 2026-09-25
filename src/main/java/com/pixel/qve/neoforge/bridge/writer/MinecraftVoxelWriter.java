@@ -3,6 +3,7 @@ package com.pixel.qve.neoforge.bridge.writer;
 import com.pixel.qve.mca.writer.IChunkWriteContext;
 import com.pixel.qve.mca.writer.McaRegionWriter;
 import com.pixel.qve.mca.writer.McaWriteCoordinator;
+import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.neoforge.api.WriteResult;
 import com.pixel.qve.neoforge.api.WriteStatus;
 import com.pixel.qve.neoforge.api.event.ChunkPostDirectWriteEvent;
@@ -76,6 +77,9 @@ public final class MinecraftVoxelWriter implements Closeable {
     public static Path resolveRegionDirectory(Level level) {
         if (level instanceof ServerLevel serverLevel) {
             try {
+                if (serverLevel.getServer() == null) {
+                    return null;
+                }
                 Path rootPath = serverLevel.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
                 Path dimFolder = net.minecraft.world.level.dimension.DimensionType.getStorageFolder(serverLevel.dimension(), rootPath);
                 Path regionDir = dimFolder.resolve("region");
@@ -168,6 +172,10 @@ public final class MinecraftVoxelWriter implements Closeable {
         });
     }
 
+    public McaWriteCoordinator getCoordinator() {
+        return coordinator;
+    }
+
     /**
      * Writes or modifies an UNLOADED chunk directly to an Anvil region file (.mca) on disk.
      * Strictly fails if the chunk is currently loaded in RAM.
@@ -178,15 +186,31 @@ public final class MinecraftVoxelWriter implements Closeable {
      * @return CompletableFuture completing with WriteResult
      */
     public CompletableFuture<WriteResult> writeChunkDirectAsync(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
-        long startTime = System.nanoTime();
+        return writeChunkDirectAsync(chunkX, chunkZ, modifier, WriteOptions.STRICT);
+    }
 
-        // 1. Assert mutual exclusion
-        try {
-            ChunkExclusivityGuard.assertSafeForDirectDiskWrite(level, chunkX, chunkZ);
-        } catch (ChunkExclusivityGuard.ChunkLoadedInRamException e) {
-            return CompletableFuture.completedFuture(
-                    WriteResult.failure(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, chunkX, chunkZ, e.getMessage())
-            );
+    /**
+     * Writes or modifies an UNLOADED chunk directly to an Anvil region file (.mca) on disk using specified WriteOptions.
+     *
+     * @param chunkX   World chunk X
+     * @param chunkZ   World chunk Z
+     * @param modifier Consumer modifying the chunk context
+     * @param options  WriteOptions governing execution and creation policies
+     * @return CompletableFuture completing with WriteResult
+     */
+    public CompletableFuture<WriteResult> writeChunkDirectAsync(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier, WriteOptions options) {
+        long startTime = System.nanoTime();
+        WriteOptions opts = (options != null) ? options : WriteOptions.STRICT;
+
+        // 1. Assert mutual exclusion if strict
+        if (opts.isStrict()) {
+            try {
+                ChunkExclusivityGuard.assertSafeForDirectDiskWrite(level, chunkX, chunkZ);
+            } catch (ChunkExclusivityGuard.ChunkLoadedInRamException e) {
+                return CompletableFuture.completedFuture(
+                        WriteResult.failure(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, chunkX, chunkZ, e.getMessage())
+                );
+            }
         }
 
         if (coordinator == null) {
@@ -195,7 +219,15 @@ public final class MinecraftVoxelWriter implements Closeable {
             );
         }
 
-        // 2. Prepare Context (pre-loading existing sections if modifying existing chunk)
+        // 2. Check CreationPolicy
+        if (opts.shouldFailIfMissing() && !coordinator.hasChunk(chunkX, chunkZ)) {
+            return CompletableFuture.completedFuture(
+                    WriteResult.failure(WriteStatus.FAIL_CHUNK_NOT_FOUND, chunkX, chunkZ,
+                            "Chunk (" + chunkX + ", " + chunkZ + ") does not exist on disk and FAIL_IF_MISSING policy is active")
+            );
+        }
+
+        // 3. Prepare Context (pre-loading existing sections if modifying existing chunk)
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
         VoxelChunkColumn existingColumn = (grid != null) ? grid.getColumn(chunkX, chunkZ) : null;
         boolean isNew = (existingColumn == null);
@@ -291,7 +323,8 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         Runnable task = () -> {
             try {
-                level.setBlock(pos, state, flags);
+                // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
+                level.setBlock(pos, state, flags | 16);
                 if (blockEntityNbt != null) {
                     BlockEntity be = level.getBlockEntity(pos);
                     if (be != null) {

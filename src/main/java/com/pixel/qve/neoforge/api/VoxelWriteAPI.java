@@ -1,6 +1,7 @@
 package com.pixel.qve.neoforge.api;
 
 import com.pixel.qve.mca.writer.IChunkWriteContext;
+import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
 import com.pixel.qve.neoforge.bridge.writer.MinecraftVoxelWriter;
 import net.minecraft.core.BlockPos;
@@ -34,7 +35,9 @@ public final class VoxelWriteAPI {
      * @return MinecraftVoxelWriter instance
      */
     public static MinecraftVoxelWriter getWriter(Level level) {
-        Objects.requireNonNull(level, "Level cannot be null");
+        if (level == null || level.dimension() == null) {
+            return null;
+        }
         return WRITERS.computeIfAbsent(level.dimension(), k -> {
             Path regionDir = MinecraftVoxelWriter.resolveRegionDirectory(level);
             return new MinecraftVoxelWriter(level, regionDir);
@@ -132,12 +135,26 @@ public final class VoxelWriteAPI {
      * @return CompletableFuture completing with WriteResult
      */
     public static CompletableFuture<WriteResult> writeChunkDirectAsync(Level level, int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
+        return writeChunkDirectAsync(level, chunkX, chunkZ, modifier, WriteOptions.STRICT);
+    }
+
+    /**
+     * Creates a new chunk OR modifies an existing UNLOADED chunk directly in an Anvil (.mca) region file using WriteOptions.
+     *
+     * @param level    Minecraft Level
+     * @param chunkX   World chunk X
+     * @param chunkZ   World chunk Z
+     * @param modifier Consumer modifying sections, blocks, or block entities
+     * @param options  WriteOptions governing execution and creation policies
+     * @return CompletableFuture completing with WriteResult
+     */
+    public static CompletableFuture<WriteResult> writeChunkDirectAsync(Level level, int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier, WriteOptions options) {
         if (level == null || modifier == null) {
             return CompletableFuture.completedFuture(
                     WriteResult.failure(WriteStatus.FAIL_INVALID_COORDINATES, chunkX, chunkZ, "Arguments cannot be null")
             );
         }
-        return getWriter(level).writeChunkDirectAsync(chunkX, chunkZ, modifier);
+        return getWriter(level).writeChunkDirectAsync(chunkX, chunkZ, modifier, options);
     }
 
     /**
@@ -233,6 +250,19 @@ public final class VoxelWriteAPI {
     }
 
     /**
+     * Fills an axis-aligned bounding volume with the given block using default {@link WriteOptions#DEFAULT}.
+     *
+     * @param level Minecraft Level
+     * @param from  First corner
+     * @param to    Opposite corner
+     * @param state Target BlockState
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public static CompletableFuture<BatchWriteResult> fillAsync(Level level, BlockPos from, BlockPos to, BlockState state) {
+        return fillAsync(level, from, to, state, null, WriteOptions.DEFAULT);
+    }
+
+    /**
      * Fills an axis-aligned bounding volume with the given block using the specified write mode.
      *
      * @param level Minecraft Level
@@ -247,6 +277,20 @@ public final class VoxelWriteAPI {
     }
 
     /**
+     * Fills an axis-aligned bounding volume with the given block using the specified WriteOptions.
+     *
+     * @param level   Minecraft Level
+     * @param from    First corner
+     * @param to      Opposite corner
+     * @param state   Target BlockState
+     * @param options Target WriteOptions
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public static CompletableFuture<BatchWriteResult> fillAsync(Level level, BlockPos from, BlockPos to, BlockState state, WriteOptions options) {
+        return fillAsync(level, from, to, state, null, options);
+    }
+
+    /**
      * Conditionally fills an axis-aligned bounding volume, replacing only matching blocks.
      *
      * @param level         Minecraft Level
@@ -258,12 +302,39 @@ public final class VoxelWriteAPI {
      * @return CompletableFuture completing with BatchWriteResult
      */
     public static CompletableFuture<BatchWriteResult> fillAsync(Level level, BlockPos from, BlockPos to, BlockState state, BlockState replaceFilter, VoxelWriteMode mode) {
+        WriteOptions opts = (mode == VoxelWriteMode.STRICT_DIRECT) ? WriteOptions.STRICT : WriteOptions.DEFAULT;
+        return fillAsync(level, from, to, state, replaceFilter, opts);
+    }
+
+    /**
+     * Conditionally fills an axis-aligned bounding volume using the specified WriteOptions.
+     *
+     * @param level         Minecraft Level
+     * @param from          First corner
+     * @param to            Opposite corner
+     * @param state         Target BlockState
+     * @param replaceFilter Filter BlockState to replace, or null for unconditional fill
+     * @param options       Target WriteOptions
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public static CompletableFuture<BatchWriteResult> fillAsync(Level level, BlockPos from, BlockPos to, BlockState state, BlockState replaceFilter, WriteOptions options) {
         if (level == null || from == null || to == null || state == null) {
             return CompletableFuture.completedFuture(new BatchWriteResult(0, 0, 0, 0, 0, 0, 0L, java.util.List.of()));
         }
         ChunkWriteBatch batch = new ChunkWriteBatch(level);
         batch.fill(from, to, state, replaceFilter);
-        return batch.executeAsync(mode);
+        return batch.executeAsync(options);
+    }
+
+    /**
+     * Executes a pre-configured ChunkWriteBatch with default {@link WriteOptions#DEFAULT}.
+     *
+     * @param level Minecraft Level
+     * @param batch ChunkWriteBatch instance
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public static CompletableFuture<BatchWriteResult> executeBatchAsync(Level level, ChunkWriteBatch batch) {
+        return executeBatchAsync(level, batch, WriteOptions.DEFAULT);
     }
 
     /**
@@ -275,10 +346,23 @@ public final class VoxelWriteAPI {
      * @return CompletableFuture completing with BatchWriteResult
      */
     public static CompletableFuture<BatchWriteResult> executeBatchAsync(Level level, ChunkWriteBatch batch, VoxelWriteMode mode) {
+        WriteOptions opts = (mode == VoxelWriteMode.STRICT_DIRECT) ? WriteOptions.STRICT : WriteOptions.DEFAULT;
+        return executeBatchAsync(level, batch, opts);
+    }
+
+    /**
+     * Executes a pre-configured ChunkWriteBatch with the specified WriteOptions.
+     *
+     * @param level   Minecraft Level
+     * @param batch   ChunkWriteBatch instance
+     * @param options Target WriteOptions
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public static CompletableFuture<BatchWriteResult> executeBatchAsync(Level level, ChunkWriteBatch batch, WriteOptions options) {
         if (batch == null) {
             return CompletableFuture.completedFuture(new BatchWriteResult(0, 0, 0, 0, 0, 0, 0L, java.util.List.of()));
         }
-        return batch.executeAsync(mode);
+        return batch.executeAsync(options);
     }
 
     /**

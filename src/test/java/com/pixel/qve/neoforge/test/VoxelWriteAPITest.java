@@ -1,5 +1,8 @@
 package com.pixel.qve.neoforge.test;
 
+import com.pixel.qve.mca.writer.WriteOptions;
+import com.pixel.qve.mca.writer.WriteOptions.CreationPolicy;
+import com.pixel.qve.mca.writer.WriteOptions.ExecutionPolicy;
 import com.pixel.qve.neoforge.api.BatchWriteResult;
 import com.pixel.qve.neoforge.api.ChunkWriteBatch;
 import com.pixel.qve.neoforge.api.WriteResult;
@@ -12,11 +15,15 @@ import com.pixel.qve.world.VoxelSection;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.Bootstrap;
+import net.minecraft.server.level.ServerChunkCache;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -172,5 +179,111 @@ public class VoxelWriteAPITest {
         assertEquals(3, res.diskChunkCount());
         assertEquals(100.0, res.durationMs(), 0.001);
         assertEquals(1_000_000.0, res.throughputBlocksPerSecond(), 1.0);
+    }
+
+    @Test
+    @DisplayName("WriteOptions presets, policy combinations, and immutability")
+    void testWriteOptionsPolicies() {
+        WriteOptions def = WriteOptions.DEFAULT;
+        assertFalse(def.isStrict());
+        assertTrue(def.canCreateIfMissing());
+        assertEquals(ExecutionPolicy.UNIFIED, def.executionPolicy());
+        assertEquals(CreationPolicy.CREATE_IF_MISSING, def.creationPolicy());
+
+        WriteOptions strict = WriteOptions.STRICT;
+        assertTrue(strict.isStrict());
+        assertTrue(strict.canCreateIfMissing());
+        assertEquals(ExecutionPolicy.STRICT_DIRECT, strict.executionPolicy());
+
+        WriteOptions existingOnly = WriteOptions.EXISTING_ONLY;
+        assertFalse(existingOnly.isStrict());
+        assertFalse(existingOnly.canCreateIfMissing());
+        assertTrue(existingOnly.shouldFailIfMissing());
+        assertEquals(CreationPolicy.FAIL_IF_MISSING, existingOnly.creationPolicy());
+
+        WriteOptions strictExisting = WriteOptions.STRICT_EXISTING_ONLY;
+        assertTrue(strictExisting.isStrict());
+        assertFalse(strictExisting.canCreateIfMissing());
+        assertTrue(strictExisting.shouldFailIfMissing());
+
+        WriteOptions custom = new WriteOptions(ExecutionPolicy.UNIFIED, CreationPolicy.CREATE_IF_MISSING);
+        assertEquals(def, custom);
+    }
+
+    @Test
+    @DisplayName("Pre-flight fail-fast validates coordinate height boundaries")
+    void testPreFlightOutOfBoundsValidation() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+        BlockState stone = Blocks.STONE.defaultBlockState();
+
+        // Enqueue block below min build height (-65 < -64)
+        batch.setBlock(new BlockPos(0, -65, 0), stone);
+
+        Optional<WriteResult> failureOpt = batch.validate(WriteOptions.DEFAULT);
+        assertTrue(failureOpt.isPresent(), "Pre-flight validation must fail for out of bounds Y");
+        WriteResult failure = failureOpt.get();
+        assertEquals(WriteStatus.FAIL_INVALID_COORDINATES, failure.status());
+        assertFalse(failure.isSuccess());
+
+        // Verify executeAsync fails fast immediately without touching blocks
+        BatchWriteResult batchRes = batch.executeAsync(WriteOptions.DEFAULT).join();
+        assertFalse(batchRes.isAllSuccessful());
+        assertEquals(1, batchRes.totalFailed());
+        assertEquals(0, batchRes.ramChunkCount());
+        assertEquals(0, batchRes.diskChunkCount());
+    }
+
+    @Test
+    @DisplayName("Pre-flight fail-fast rejects RAM chunks under strict policy")
+    void testPreFlightStrictRamRejection() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        ServerChunkCache mockCache = org.mockito.Mockito.mock(ServerChunkCache.class);
+        org.mockito.Mockito.when(mockLevel.getChunkSource()).thenReturn(mockCache);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        // Chunk (5, 5) is loaded in RAM
+        org.mockito.Mockito.when(mockCache.hasChunk(5, 5)).thenReturn(true);
+        // Chunk (6, 6) is not loaded
+        org.mockito.Mockito.when(mockCache.hasChunk(6, 6)).thenReturn(false);
+
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        batch.setBlock(new BlockPos(5 * 16, 64, 5 * 16), stone);
+
+        // In UNIFIED mode, validation passes
+        Optional<WriteResult> unifiedOpt = batch.validate(WriteOptions.DEFAULT);
+        assertTrue(unifiedOpt.isEmpty(), "Unified mode must allow RAM chunks during pre-flight");
+
+        // In STRICT mode, validation must fail fast
+        Optional<WriteResult> strictOpt = batch.validate(WriteOptions.STRICT);
+        assertTrue(strictOpt.isPresent(), "Strict mode must reject RAM chunks during pre-flight");
+        assertEquals(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, strictOpt.get().status());
+    }
+
+    @Test
+    @DisplayName("Pre-flight fail-fast rejects ungenerated chunks under FAIL_IF_MISSING policy")
+    void testPreFlightFailIfMissing() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        ServerChunkCache mockCache = org.mockito.Mockito.mock(ServerChunkCache.class);
+        org.mockito.Mockito.when(mockLevel.getChunkSource()).thenReturn(mockCache);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        // Chunk (999, 999) is NOT in RAM
+        org.mockito.Mockito.when(mockCache.hasChunk(999, 999)).thenReturn(false);
+
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        batch.setBlock(new BlockPos(999 * 16, 64, 999 * 16), stone);
+
+        // Under EXISTING_ONLY without coordinator having chunk -> fails fast with FAIL_CHUNK_NOT_FOUND
+        Optional<WriteResult> failOpt = batch.validate(WriteOptions.EXISTING_ONLY);
+        assertTrue(failOpt.isPresent(), "FAIL_IF_MISSING must reject missing chunk during pre-flight");
+        assertEquals(WriteStatus.FAIL_CHUNK_NOT_FOUND, failOpt.get().status());
     }
 }

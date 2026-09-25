@@ -104,6 +104,20 @@ public final class McaRegionWriter implements Closeable {
     }
 
     /**
+     * Checks if a local chunk exists and has allocated sectors in the header.
+     *
+     * @param localChunkX Local chunk X [0..31]
+     * @param localChunkZ Local chunk Z [0..31]
+     * @return True if chunk exists
+     */
+    public synchronized boolean hasChunk(int localChunkX, int localChunkZ) {
+        if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
+            return false;
+        }
+        return allocator.hasChunk(localChunkX + localChunkZ * 32);
+    }
+
+    /**
      * Gets the path to the region file.
      *
      * @return File path

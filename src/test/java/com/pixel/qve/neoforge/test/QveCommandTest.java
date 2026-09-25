@@ -51,7 +51,7 @@ public class QveCommandTest {
         // Verify with CommandBuildContext
         try {
             var buildContext = net.minecraft.commands.Commands.createValidationContext(
-                    net.minecraft.core.registries.BuiltInRegistries.createWrapperLookup()
+                    net.minecraft.core.RegistryAccess.fromRegistryOfRegistries(net.minecraft.core.registries.BuiltInRegistries.REGISTRY)
             );
             CommandDispatcher<CommandSourceStack> fullDispatcher = new CommandDispatcher<>();
             QveCommand.register(fullDispatcher, buildContext);

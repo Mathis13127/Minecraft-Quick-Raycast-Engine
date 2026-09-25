@@ -45,6 +45,59 @@ public final class McaWriteCoordinator implements Closeable {
     }
 
     /**
+     * Gets the root directory containing Anvil region files.
+     *
+     * @return Path to region directory
+     */
+    public Path getRegionDirectory() {
+        return regionDirectory;
+    }
+
+    /**
+     * Checks if the Anvil region file for the given chunk coordinates exists on disk.
+     *
+     * @param chunkX World chunk X
+     * @param chunkZ World chunk Z
+     * @return True if r.X.Z.mca exists
+     */
+    public boolean hasRegionFile(int chunkX, int chunkZ) {
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+        return java.nio.file.Files.isRegularFile(mcaFile);
+    }
+
+    /**
+     * Checks if the given chunk exists on disk (has allocated sectors in the region header).
+     *
+     * @param chunkX World chunk X
+     * @param chunkZ World chunk Z
+     * @return True if chunk exists in the region file
+     */
+    public boolean hasChunk(int chunkX, int chunkZ) {
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        int localX = chunkX & 31;
+        int localZ = chunkZ & 31;
+        long rKey = regionKey(rx, rz);
+
+        McaRegionWriter existing = openWriters.get(rKey);
+        if (existing != null) {
+            return existing.hasChunk(localX, localZ);
+        }
+
+        Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+        if (!java.nio.file.Files.isRegularFile(mcaFile)) {
+            return false;
+        }
+        try (com.pixel.qve.mca.McaRegionReader reader = new com.pixel.qve.mca.McaRegionReader(mcaFile, registry)) {
+            return reader.hasChunk(localX, localZ);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
      * Registers a lifecycle listener for chunk write operations.
      *
      * @param listener Listener instance

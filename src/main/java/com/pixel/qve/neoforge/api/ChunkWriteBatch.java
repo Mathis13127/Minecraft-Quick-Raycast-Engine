@@ -1,8 +1,11 @@
 package com.pixel.qve.neoforge.api;
 
+import com.pixel.qve.mca.writer.McaWriteCoordinator;
+import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelGrid;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
+import com.pixel.qve.neoforge.bridge.writer.MinecraftVoxelWriter;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -277,43 +280,106 @@ public final class ChunkWriteBatch {
     }
 
     /**
-     * Executes the batch asynchronously using default {@link VoxelWriteMode#UNIFIED} routing.
+     * Performs a strict pre-flight validation of the entire batch against the given WriteOptions.
+     * Evaluates world coordinate height boundaries, strict RAM exclusivity, and chunk existence.
+     *
+     * @param options Target WriteOptions
+     * @return Empty Optional if validation succeeded, or Optional containing the first failure WriteResult
+     */
+    public Optional<WriteResult> validate(WriteOptions options) {
+        WriteOptions opts = (options != null) ? options : WriteOptions.DEFAULT;
+
+        int worldMinY = level.getMinBuildHeight();
+        int worldMaxY = level.getMaxBuildHeight() - 1;
+
+        MinecraftVoxelWriter writer = VoxelWriteAPI.getWriter(level);
+        McaWriteCoordinator coordinator = (writer != null) ? writer.getCoordinator() : null;
+
+        for (ChunkEdits edits : chunkEditsMap.values()) {
+            int cx = edits.getChunkX();
+            int cz = edits.getChunkZ();
+
+            // 1. Validate coordinate heights
+            for (BlockMutation m : edits.getMutations()) {
+                if (m.worldY() < worldMinY || m.worldY() > worldMaxY) {
+                    return Optional.of(WriteResult.failure(
+                            WriteStatus.FAIL_INVALID_COORDINATES,
+                            cx, cz,
+                            String.format("Block mutation at (%d, %d, %d) Y=%d is outside world bounds [%d..%d]",
+                                    m.worldX(), m.worldY(), m.worldZ(), m.worldY(), worldMinY, worldMaxY)
+                    ));
+                }
+            }
+
+            // 2. Strict RAM mutual exclusion check
+            boolean inRam = ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz);
+            if (opts.isStrict() && inRam) {
+                return Optional.of(WriteResult.failure(
+                        WriteStatus.FAIL_CHUNK_LOADED_IN_RAM,
+                        cx, cz,
+                        String.format("Direct MCA write rejected by strict policy: chunk (%d, %d) is currently loaded in RAM", cx, cz)
+                ));
+            }
+
+            // 3. Existence check if CreationPolicy == FAIL_IF_MISSING
+            if (opts.shouldFailIfMissing() && !inRam) {
+                if (coordinator == null || !coordinator.hasChunk(cx, cz)) {
+                    return Optional.of(WriteResult.failure(
+                            WriteStatus.FAIL_CHUNK_NOT_FOUND,
+                            cx, cz,
+                            String.format("Chunk (%d, %d) does not exist on disk and FAIL_IF_MISSING policy is active", cx, cz)
+                    ));
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Executes the batch asynchronously using default {@link WriteOptions#DEFAULT} (Unified routing).
      *
      * @return CompletableFuture completing with BatchWriteResult
      */
     public CompletableFuture<BatchWriteResult> executeAsync() {
-        return executeAsync(VoxelWriteMode.UNIFIED);
+        return executeAsync(WriteOptions.DEFAULT);
     }
 
     /**
-     * Executes the batch asynchronously with the specified write mode.
+     * Executes the batch asynchronously with the specified write mode (backward compatibility).
      *
      * @param mode Target write mode (UNIFIED or STRICT_DIRECT)
      * @return CompletableFuture completing with BatchWriteResult
      */
     public CompletableFuture<BatchWriteResult> executeAsync(VoxelWriteMode mode) {
+        WriteOptions opts = (mode == VoxelWriteMode.STRICT_DIRECT) ? WriteOptions.STRICT : WriteOptions.DEFAULT;
+        return executeAsync(opts);
+    }
+
+    /**
+     * Executes the batch asynchronously with the specified WriteOptions.
+     * Enforces fail-fast pre-flight validation before modifying any storage.
+     *
+     * @param options Target WriteOptions governing execution and creation policies
+     * @return CompletableFuture completing with BatchWriteResult
+     */
+    public CompletableFuture<BatchWriteResult> executeAsync(WriteOptions options) {
         long startTime = System.nanoTime();
         if (chunkEditsMap.isEmpty()) {
             return CompletableFuture.completedFuture(new BatchWriteResult(0, 0, 0, 0, 0, 0, 0L, List.of()));
         }
 
+        WriteOptions opts = (options != null) ? options : WriteOptions.DEFAULT;
         int totalBlocks = totalBlockCount;
 
-        // 1. Strict Direct pre-flight mutual exclusion check
-        if (mode == VoxelWriteMode.STRICT_DIRECT) {
-            for (ChunkEdits edits : chunkEditsMap.values()) {
-                if (ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ)) {
-                    WriteResult failure = WriteResult.failure(
-                            WriteStatus.FAIL_CHUNK_LOADED_IN_RAM,
-                            edits.chunkX, edits.chunkZ,
-                            "Chunk (" + edits.chunkX + ", " + edits.chunkZ + ") is currently loaded in RAM"
-                    );
-                    return CompletableFuture.completedFuture(
-                            new BatchWriteResult(chunkEditsMap.size(), 0, chunkEditsMap.size(), totalBlocks, 0, 0,
-                                    System.nanoTime() - startTime, List.of(failure))
-                    );
-                }
-            }
+        // 1. Strict Pre-Flight Fail-Fast Validation (Zero blocks written if invalid)
+        Optional<WriteResult> failFast = validate(opts);
+        if (failFast.isPresent()) {
+            long duration = System.nanoTime() - startTime;
+            return CompletableFuture.completedFuture(new BatchWriteResult(
+                    chunkEditsMap.size(), 0, chunkEditsMap.size(),
+                    totalBlocks, 0, 0, duration, List.of(failFast.get())
+            ));
         }
 
         // 2. Partition chunks into RAM and Disk pools
@@ -321,7 +387,7 @@ public final class ChunkWriteBatch {
         List<ChunkEdits> diskChunks = new ArrayList<>();
 
         for (ChunkEdits edits : chunkEditsMap.values()) {
-            boolean isRam = (mode == VoxelWriteMode.UNIFIED) && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ);
+            boolean isRam = !opts.isStrict() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ);
             if (isRam) {
                 ramChunks.add(edits);
             } else {
@@ -345,7 +411,8 @@ public final class ChunkWriteBatch {
                             BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
                             BlockState cur = level.getBlockState(pos);
                             if (m.matchesFilter(-1, cur)) {
-                                level.setBlock(pos, m.targetState(), 2);
+                                // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
+                                level.setBlock(pos, m.targetState(), 2 | 16);
                                 if (m.tagNbt() != null) {
                                     BlockEntity be = level.getBlockEntity(pos);
                                     if (be != null) {
@@ -387,22 +454,26 @@ public final class ChunkWriteBatch {
             }
         }
 
-        // 4. Dispatch Disk chunks via direct MCA coordinator
+        // 4. Dispatch Disk chunks via direct MCA coordinator (with adaptive routing if unified)
         for (ChunkEdits edits : diskChunks) {
-            futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.chunkX, edits.chunkZ, ctx -> {
-                for (Map.Entry<Integer, VoxelSection> secEntry : edits.wholeSections.entrySet()) {
-                    ctx.setSection(secEntry.getKey(), secEntry.getValue());
-                }
-                for (BlockMutation m : edits.mutations) {
-                    int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
-                    if (m.matchesFilter(curId, null)) {
-                        ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
-                        if (m.rawNbt() != null) {
-                            ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+            if (opts.isUnified() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ)) {
+                futures.add(applyChunkToRamAsync(edits));
+            } else {
+                futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.chunkX, edits.chunkZ, ctx -> {
+                    for (Map.Entry<Integer, VoxelSection> secEntry : edits.wholeSections.entrySet()) {
+                        ctx.setSection(secEntry.getKey(), secEntry.getValue());
+                    }
+                    for (BlockMutation m : edits.mutations) {
+                        int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
+                        if (m.matchesFilter(curId, null)) {
+                            ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
+                            if (m.rawNbt() != null) {
+                                ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+                            }
                         }
                     }
-                }
-            }));
+                }, opts));
+            }
         }
 
         // 5. Aggregate all results into BatchWriteResult
@@ -429,17 +500,63 @@ public final class ChunkWriteBatch {
                 });
     }
 
+    private CompletableFuture<WriteResult> applyChunkToRamAsync(ChunkEdits edits) {
+        long startTime = System.nanoTime();
+        CompletableFuture<WriteResult> future = new CompletableFuture<>();
+        Runnable task = () -> {
+            try {
+                for (BlockMutation m : edits.mutations) {
+                    BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
+                    BlockState cur = level.getBlockState(pos);
+                    if (m.matchesFilter(-1, cur)) {
+                        level.setBlock(pos, m.targetState(), 2 | 16);
+                        if (m.tagNbt() != null) {
+                            BlockEntity be = level.getBlockEntity(pos);
+                            if (be != null) {
+                                be.loadWithComponents(m.tagNbt(), level.registryAccess());
+                                be.setChanged();
+                            }
+                        }
+                    }
+                }
+                LevelChunk lc = level.getChunk(edits.chunkX, edits.chunkZ);
+                if (lc != null) {
+                    lc.setUnsaved(true);
+                }
+                MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
+                if (grid != null) {
+                    grid.getCache().invalidateChunk(edits.chunkX, edits.chunkZ);
+                }
+                long duration = System.nanoTime() - startTime;
+                future.complete(WriteResult.successRam(edits.chunkX, edits.chunkZ, duration));
+            } catch (Throwable t) {
+                future.complete(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.chunkX, edits.chunkZ, t.getMessage()));
+            }
+        };
+
+        if (level instanceof ServerLevel sl) {
+            if (Thread.currentThread() == sl.getServer().getRunningThread()) {
+                task.run();
+            } else {
+                sl.getServer().execute(task);
+            }
+        } else {
+            task.run();
+        }
+        return future;
+    }
+
     /**
      * Backward-compatible alias executing strictly in direct disk mode.
      */
     public CompletableFuture<BatchWriteResult> executeDirectAsync() {
-        return executeAsync(VoxelWriteMode.STRICT_DIRECT);
+        return executeAsync(WriteOptions.STRICT);
     }
 
     /**
      * Backward-compatible alias executing in unified mode.
      */
     public CompletableFuture<BatchWriteResult> executeUnifiedAsync() {
-        return executeAsync(VoxelWriteMode.UNIFIED);
+        return executeAsync(WriteOptions.DEFAULT);
     }
 }
