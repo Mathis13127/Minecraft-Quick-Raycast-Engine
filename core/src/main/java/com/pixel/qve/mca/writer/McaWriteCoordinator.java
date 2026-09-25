@@ -299,6 +299,53 @@ public final class McaWriteCoordinator implements Closeable {
         }
     }
 
+    /**
+     * Surgically verifies whether a single voxel physically written to disk matches the expected block ID,
+     * reusing open region writers and zero-allocation decompression buffers.
+     *
+     * @param chunkX          World chunk X
+     * @param chunkZ          World chunk Z
+     * @param localX          Local voxel X [0..15]
+     * @param worldY          World block Y
+     * @param localZ          Local voxel Z [0..15]
+     * @param expectedBlockId Expected Block ID in BlockIdRegistry
+     * @return True if physical block matches expectedBlockId
+     */
+    public boolean verifyVoxel(int chunkX, int chunkZ, int localX, int worldY, int localZ, int expectedBlockId) {
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        int localCx = chunkX & 31;
+        int localCz = chunkZ & 31;
+        long rKey = regionKey(rx, rz);
+
+        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            McaRegionWriter writer = openWriters.get(rKey);
+            if (writer == null) {
+                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+                if (!java.nio.file.Files.isRegularFile(mcaFile)) {
+                    return expectedBlockId == BlockIdRegistry.AIR_ID;
+                }
+                writer = getOrOpenWriter(rx, rz);
+            }
+
+            java.nio.ByteBuffer payload = writer.readChunkPayload(localCx, localCz);
+            if (payload == null) {
+                return expectedBlockId == BlockIdRegistry.AIR_ID;
+            }
+
+            return FastChunkVerifier.verifyVoxel(payload, localX, worldY, localZ, expectedBlockId, registry);
+        } catch (Exception e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to verify voxel ({0}, {1}, {2}) in chunk ({3}, {4}): {5}",
+                    localX, worldY, localZ, chunkX, chunkZ, e.getMessage());
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private McaRegionWriter getOrOpenWriter(int rx, int rz) throws IOException {
         long rKey = regionKey(rx, rz);
         McaRegionWriter existing = openWriters.get(rKey);

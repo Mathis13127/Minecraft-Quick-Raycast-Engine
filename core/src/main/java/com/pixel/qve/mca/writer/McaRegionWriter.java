@@ -120,6 +120,11 @@ public final class McaRegionWriter implements Closeable {
         return allocator.hasChunk(localChunkX + localChunkZ * 32);
     }
 
+    private static final ThreadLocal<ByteBuffer> HEADER_READ_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocate(5));
+    private static final ThreadLocal<ByteBuffer> COMPRESS_READ_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(256 * 1024));
+    private static final ThreadLocal<Inflater> INFLATER_CACHE = ThreadLocal.withInitial(() -> new Inflater(false));
+    private static final ThreadLocal<ByteBuffer> DECOMPRESS_BUFFER = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(1024 * 1024));
+
     /**
      * Reads and decompresses the raw NBT payload for the given local chunk from this region file.
      *
@@ -144,7 +149,8 @@ public final class McaRegionWriter implements Closeable {
             if (filePos + 5 > channel.size()) {
                 return null;
             }
-            ByteBuffer header = ByteBuffer.allocate(5);
+            ByteBuffer header = HEADER_READ_BUF.get();
+            header.clear();
             channel.read(header, filePos);
             header.flip();
             int length = header.getInt();
@@ -156,29 +162,44 @@ public final class McaRegionWriter implements Closeable {
             }
 
             int payloadLength = length - 1;
-            ByteBuffer compressed = ByteBuffer.allocate(payloadLength);
+            ByteBuffer compressed = COMPRESS_READ_BUF.get();
+            if (compressed.capacity() < payloadLength) {
+                compressed = ByteBuffer.allocateDirect(Math.max(payloadLength, compressed.capacity() * 2));
+                COMPRESS_READ_BUF.set(compressed);
+            }
+            compressed.clear();
+            compressed.limit(payloadLength);
             channel.read(compressed, filePos + 5);
             compressed.flip();
 
             if (compressionType == 2) { // ZLIB
-                Inflater inflater = new Inflater();
-                inflater.setInput(compressed.array(), compressed.arrayOffset(), payloadLength);
-                ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.max(4096, payloadLength * 3));
-                byte[] buf = new byte[8192];
+                ByteBuffer target = DECOMPRESS_BUFFER.get();
+                target.clear();
+                Inflater inflater = INFLATER_CACHE.get();
+                inflater.reset();
+                inflater.setInput(compressed);
                 while (!inflater.finished()) {
-                    int read = inflater.inflate(buf);
-                    if (read == 0 && inflater.needsInput()) break;
-                    baos.write(buf, 0, read);
+                    if (!target.hasRemaining()) {
+                        ByteBuffer expanded = ByteBuffer.allocateDirect(target.capacity() * 2);
+                        target.flip();
+                        expanded.put(target);
+                        DECOMPRESS_BUFFER.set(expanded);
+                        target = expanded;
+                    }
+                    int written = inflater.inflate(target);
+                    if (written == 0 && inflater.needsInput()) break;
                 }
-                inflater.end();
-                return ByteBuffer.wrap(baos.toByteArray());
+                target.flip();
+                return target.slice();
             } else if (compressionType == 1) { // GZIP
-                try (ByteArrayInputStream bais = new ByteArrayInputStream(compressed.array(), compressed.arrayOffset(), payloadLength);
+                byte[] raw = new byte[payloadLength];
+                compressed.get(raw);
+                try (ByteArrayInputStream bais = new ByteArrayInputStream(raw);
                      java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(bais)) {
                     return ByteBuffer.wrap(gzip.readAllBytes());
                 }
             } else if (compressionType == 3) { // Uncompressed
-                return compressed;
+                return compressed.slice();
             }
         } catch (Exception e) {
             LOGGER.log(System.Logger.Level.WARNING,

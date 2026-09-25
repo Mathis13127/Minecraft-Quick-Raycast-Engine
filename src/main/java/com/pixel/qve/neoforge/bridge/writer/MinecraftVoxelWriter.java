@@ -8,6 +8,7 @@ import com.pixel.qve.neoforge.api.WriteResult;
 import com.pixel.qve.neoforge.api.WriteStatus;
 import com.pixel.qve.neoforge.api.event.ChunkPostDirectWriteEvent;
 import com.pixel.qve.neoforge.api.event.ChunkPreDirectWriteEvent;
+import com.pixel.qve.state.BlockIdRegistry;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelGrid;
 import com.pixel.qve.world.VoxelChunkColumn;
@@ -301,6 +302,9 @@ public final class MinecraftVoxelWriter implements Closeable {
      * @return True if block physically on disk matches expectedBlockId
      */
     public boolean verifyPhysicalDiskWrite(int chunkX, int chunkZ, int localX, int worldY, int localZ, int expectedBlockId) {
+        if (coordinator != null) {
+            return coordinator.verifyVoxel(chunkX, chunkZ, localX, worldY, localZ, expectedBlockId);
+        }
         if (regionDirectory == null) {
             return false;
         }
@@ -308,20 +312,18 @@ public final class MinecraftVoxelWriter implements Closeable {
         int rz = chunkZ >> 5;
         Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
         if (!Files.isRegularFile(mcaFile)) {
-            return false;
+            return expectedBlockId == BlockIdRegistry.AIR_ID;
         }
 
         try (com.pixel.qve.mca.McaRegionReader directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry())) {
             int localCx = chunkX & 31;
             int localCz = chunkZ & 31;
-            int secY = worldY >> 4;
-            int[] foundId = new int[]{-1};
-            directReader.readChunk(localCx, localCz, (sy, sec) -> {
-                if (sy == secY && sec != null) {
-                    foundId[0] = sec.getBlockId(localX & 15, worldY & 15, localZ & 15);
-                }
-            });
-            return foundId[0] == expectedBlockId;
+            java.nio.ByteBuffer payload = directReader.decompressChunk(localCx, localCz);
+            if (payload == null) {
+                return expectedBlockId == BlockIdRegistry.AIR_ID;
+            }
+            return com.pixel.qve.mca.writer.FastChunkVerifier.verifyVoxel(
+                    payload, localX, worldY, localZ, expectedBlockId, MinecraftVoxelBridge.getBlockRegistry());
         } catch (Exception e) {
             LOGGER.warn("Physical disk verification failed for chunk ({}, {}): {}", chunkX, chunkZ, e.getMessage());
             return false;
