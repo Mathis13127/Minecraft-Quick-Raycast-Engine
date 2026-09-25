@@ -552,11 +552,17 @@ public final class ChunkWriteBatch {
 
                 for (ChunkEdits edits : ramChunks) {
                     long t0 = System.nanoTime();
+                    record AppliedRamMutation(BlockPos pos, BlockState previousState, CompoundTag previousBeNbt) {}
+                    List<AppliedRamMutation> applied = new ArrayList<>();
                     try {
                         for (BlockMutation m : edits.mutations) {
                             BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
                             BlockState cur = level.getBlockState(pos);
                             if (m.matchesFilter(-1, cur)) {
+                                BlockEntity oldBe = level.getBlockEntity(pos);
+                                CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
+                                applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
+
                                 // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
                                 level.setBlock(pos, m.targetState(), 2 | 16);
                                 if (m.tagNbt() != null) {
@@ -578,6 +584,20 @@ public final class ChunkWriteBatch {
                         long elapsed = System.nanoTime() - t0;
                         resList.add(WriteResult.successRam(edits.chunkX, edits.chunkZ, elapsed));
                     } catch (Throwable t) {
+                        for (int i = applied.size() - 1; i >= 0; i--) {
+                            AppliedRamMutation arm = applied.get(i);
+                            try {
+                                level.setBlock(arm.pos(), arm.previousState(), 2 | 16);
+                                if (arm.previousBeNbt() != null) {
+                                    BlockEntity be = level.getBlockEntity(arm.pos());
+                                    if (be != null) {
+                                        be.loadWithComponents(arm.previousBeNbt(), level.registryAccess());
+                                        be.setChanged();
+                                    }
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
                         resList.add(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.chunkX, edits.chunkZ, t.getMessage()));
                     }
                 }

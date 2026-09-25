@@ -25,6 +25,11 @@ public final class FastChunkNbtPatcher {
     private static final byte[] COORD_X_NAME = "x".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] COORD_Y_NAME = "y".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] COORD_Z_NAME = "z".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] X_POS_NAME = "xPos".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] Z_POS_NAME = "zPos".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] Y_POS_NAME = "yPos".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] STATUS_NAME = "Status".getBytes(StandardCharsets.US_ASCII);
+    private static final String FULL_STATUS = "minecraft:full";
 
     private FastChunkNbtPatcher() {}
 
@@ -70,6 +75,10 @@ public final class FastChunkNbtPatcher {
 
         boolean wroteSections = false;
         boolean wroteHeightmaps = false;
+        boolean wroteXPos = false;
+        boolean wroteZPos = false;
+        boolean wroteYPos = false;
+        boolean wroteStatus = false;
 
         while (buf.hasRemaining()) {
             int tagStart = buf.position();
@@ -82,7 +91,23 @@ public final class FastChunkNbtPatcher {
             int namePos = buf.position();
             buf.position(namePos + nameLen);
 
-            if (tagType == FastNbtReader.TAG_LIST && FastNbtReader.matches(buf, namePos, nameLen, SECTIONS_NAME)) {
+            if (tagType == FastNbtReader.TAG_INT && FastNbtReader.matches(buf, namePos, nameLen, X_POS_NAME)) {
+                FastNbtReader.skipTagPayload(buf, tagType);
+                targetWriter.putInt(X_POS_NAME, chunkX);
+                wroteXPos = true;
+            } else if (tagType == FastNbtReader.TAG_INT && FastNbtReader.matches(buf, namePos, nameLen, Z_POS_NAME)) {
+                FastNbtReader.skipTagPayload(buf, tagType);
+                targetWriter.putInt(Z_POS_NAME, chunkZ);
+                wroteZPos = true;
+            } else if (tagType == FastNbtReader.TAG_INT && FastNbtReader.matches(buf, namePos, nameLen, Y_POS_NAME)) {
+                FastNbtReader.skipTagPayload(buf, tagType);
+                targetWriter.putInt(Y_POS_NAME, minSectionY);
+                wroteYPos = true;
+            } else if (tagType == FastNbtReader.TAG_STRING && FastNbtReader.matches(buf, namePos, nameLen, STATUS_NAME)) {
+                FastNbtReader.skipTagPayload(buf, tagType);
+                targetWriter.putString(STATUS_NAME, FULL_STATUS);
+                wroteStatus = true;
+            } else if (tagType == FastNbtReader.TAG_LIST && FastNbtReader.matches(buf, namePos, nameLen, SECTIONS_NAME)) {
                 patchSectionsList(buf, targetWriter, modifiedSections, minSectionY, maxSectionY, registry);
                 wroteSections = true;
             } else if (tagType == FastNbtReader.TAG_COMPOUND && FastNbtReader.matches(buf, namePos, nameLen, HEIGHTMAPS_NAME)) {
@@ -101,6 +126,19 @@ public final class FastChunkNbtPatcher {
                 slice.limit(tagEnd);
                 targetWriter.putRawBytes(slice);
             }
+        }
+
+        if (!wroteXPos) {
+            targetWriter.putInt(X_POS_NAME, chunkX);
+        }
+        if (!wroteZPos) {
+            targetWriter.putInt(Z_POS_NAME, chunkZ);
+        }
+        if (!wroteYPos) {
+            targetWriter.putInt(Y_POS_NAME, minSectionY);
+        }
+        if (!wroteStatus) {
+            targetWriter.putString(STATUS_NAME, FULL_STATUS);
         }
 
         if (!wroteSections && modifiedSections != null && !modifiedSections.isEmpty()) {

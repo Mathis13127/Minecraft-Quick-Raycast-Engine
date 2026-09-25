@@ -96,8 +96,8 @@ public class FastChunkNbtPatcherTest {
         assertEquals(3955, root.get("DataVersion"));
         assertEquals(10, root.get("xPos"));
         assertEquals(20, root.get("zPos"));
-        // Status MUST NOT be overwritten with "minecraft:full"
-        assertEquals("minecraft:features", root.get("Status"));
+        // Status MUST be promoted to "minecraft:full" to prevent Minecraft worldgen relocation
+        assertEquals("minecraft:full", root.get("Status"));
         assertEquals(987654321L, root.get("InhabitedTime"));
 
         // Structures MUST be preserved
@@ -251,5 +251,44 @@ public class FastChunkNbtPatcherTest {
         assertEquals(42, sec.getBlockId(3, 4, 5));
         assertEquals(5, sec.getBlockId(0, 0, 0));
         assertEquals(5, sec.getBlockId(15, 15, 15));
+    }
+
+    @Test
+    @DisplayName("Verify FastChunkNbtPatcher strictly enforces xPos, zPos, yPos, and Status: minecraft:full")
+    void testCoordinateAndStatusEnforcement() {
+        BlockIdRegistry registry = new BlockIdRegistry();
+
+        // Synthesize chunk with wrong/proto coordinates and status
+        FastNbtWriter writer = new FastNbtWriter(4096);
+        writer.beginRootCompound("")
+                .putInt("DataVersion", 3955)
+                .putInt("xPos", 999)
+                .putInt("zPos", -888)
+                .putInt("yPos", 0)
+                .putString("Status", "minecraft:carvers")
+                .beginList("sections", FastNbtReader.TAG_COMPOUND, 0)
+                .endCompound();
+
+        ByteBuffer inputBuf = ByteBuffer.wrap(writer.toByteArray());
+
+        FastNbtWriter outWriter = new FastNbtWriter(4096);
+        FastChunkNbtPatcher.patchChunk(
+                inputBuf,
+                -108, 4020,
+                -4, 19,
+                registry,
+                Map.of(),
+                null,
+                outWriter
+        );
+
+        ByteBuffer patchedBuf = ByteBuffer.wrap(outWriter.toByteArray());
+        Map<String, Object> root = FastNbtReader.parseRootCompound(patchedBuf);
+
+        assertNotNull(root);
+        assertEquals(-108, root.get("xPos"), "xPos must be strictly overwritten to target chunkX");
+        assertEquals(4020, root.get("zPos"), "zPos must be strictly overwritten to target chunkZ");
+        assertEquals(-4, root.get("yPos"), "yPos must match minSectionY");
+        assertEquals("minecraft:full", root.get("Status"), "Status must be promoted to minecraft:full");
     }
 }

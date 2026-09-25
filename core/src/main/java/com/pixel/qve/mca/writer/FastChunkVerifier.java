@@ -21,8 +21,86 @@ public final class FastChunkVerifier {
     private static final byte[] Y_NAME = "Y".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] NAME_NAME = "Name".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] PROPERTIES_NAME = "Properties".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] X_POS_NAME = "xPos".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] Z_POS_NAME = "zPos".getBytes(StandardCharsets.US_ASCII);
 
     private FastChunkVerifier() {}
+
+    /**
+     * Surgically verifies whether the decompressed chunk compound contains matching xPos and zPos coordinates.
+     *
+     * @param payload        Decompressed NBT root compound buffer
+     * @param expectedChunkX Expected world chunk X
+     * @param expectedChunkZ Expected world chunk Z
+     * @return True if chunk payload coordinates strictly match expected values
+     */
+    public static boolean verifyChunkCoordinates(ByteBuffer payload, int expectedChunkX, int expectedChunkZ) {
+        if (payload == null) {
+            return false;
+        }
+        ByteBuffer buf = payload.duplicate();
+        if (!buf.hasRemaining()) {
+            return false;
+        }
+
+        byte rootType = buf.get();
+        if (rootType != FastNbtReader.TAG_COMPOUND) {
+            return false;
+        }
+
+        int rootNameLen = buf.getShort() & 0xFFFF;
+        buf.position(buf.position() + rootNameLen);
+
+        boolean foundX = false;
+        boolean foundZ = false;
+        int xPos = Integer.MIN_VALUE;
+        int zPos = Integer.MIN_VALUE;
+
+        while (buf.hasRemaining()) {
+            byte tagType = buf.get();
+            if (tagType == FastNbtReader.TAG_END) break;
+
+            int nameLen = buf.getShort() & 0xFFFF;
+            int namePos = buf.position();
+            buf.position(namePos + nameLen);
+
+            if (tagType == FastNbtReader.TAG_INT && FastNbtReader.matches(buf, namePos, nameLen, X_POS_NAME)) {
+                xPos = buf.getInt();
+                foundX = true;
+                if (foundZ) break;
+            } else if (tagType == FastNbtReader.TAG_INT && FastNbtReader.matches(buf, namePos, nameLen, Z_POS_NAME)) {
+                zPos = buf.getInt();
+                foundZ = true;
+                if (foundX) break;
+            } else {
+                FastNbtReader.skipTagPayload(buf, tagType);
+            }
+        }
+
+        return foundX && foundZ && xPos == expectedChunkX && zPos == expectedChunkZ;
+    }
+
+    /**
+     * Surgically verifies both chunk coordinates and a single target voxel in a decompressed chunk NBT payload.
+     *
+     * @param payload         Decompressed NBT root compound buffer
+     * @param expectedChunkX  Expected world chunk X
+     * @param expectedChunkZ  Expected world chunk Z
+     * @param localX          Local voxel X [0..15]
+     * @param worldY          World block Y
+     * @param localZ          Local voxel Z [0..15]
+     * @param expectedBlockId Expected Block ID in BlockIdRegistry
+     * @param registry        BlockIdRegistry instance
+     * @return True if both chunk coordinates and block physically match
+     */
+    public static boolean verifyChunkVoxel(ByteBuffer payload, int expectedChunkX, int expectedChunkZ,
+                                          int localX, int worldY, int localZ,
+                                          int expectedBlockId, BlockIdRegistry registry) {
+        if (!verifyChunkCoordinates(payload, expectedChunkX, expectedChunkZ)) {
+            return false;
+        }
+        return verifyVoxel(payload, localX, worldY, localZ, expectedBlockId, registry);
+    }
 
     /**
      * Surgically verifies whether a single block in a decompressed chunk NBT payload matches

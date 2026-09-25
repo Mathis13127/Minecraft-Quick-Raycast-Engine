@@ -163,4 +163,42 @@ public class FastChunkVerifierTest {
         assertTrue(FastChunkVerifier.verifyVoxel(buf, 2, 20, 2, BlockIdRegistry.AIR_ID, registry));
         assertFalse(FastChunkVerifier.verifyVoxel(buf, 2, 20, 2, goldId, registry));
     }
+
+    @Test
+    @DisplayName("Verify verifyChunkCoordinates and verifyChunkVoxel audit chunk header coords")
+    void testVerifyChunkCoordinatesAndVoxel() {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int diamondId = registry.getOrRegister("minecraft:diamond_block");
+
+        FastNbtWriter writer = new FastNbtWriter();
+        writer.beginRootCompound("")
+                .putInt("DataVersion", 3955)
+                .putInt("xPos", -108)
+                .putInt("zPos", 4020)
+                .putString("Status", "minecraft:full")
+                .beginList("sections", FastNbtReader.TAG_COMPOUND, 1)
+                    .beginListCompound()
+                        .putByte("Y", (byte) 0)
+                        .beginCompound("block_states")
+                            .beginList("palette", FastNbtReader.TAG_COMPOUND, 1)
+                                .beginListCompound()
+                                    .putString("Name", "minecraft:diamond_block")
+                                .endCompound()
+                            .endCompound()
+                        .endCompound()
+                    .endCompound()
+                .endCompound()
+                .endCompound();
+
+        ByteBuffer buf = writer.toReadBuffer();
+
+        // Matching coords
+        assertTrue(FastChunkVerifier.verifyChunkCoordinates(buf, -108, 4020));
+        assertTrue(FastChunkVerifier.verifyChunkVoxel(buf, -108, 4020, 5, 5, 5, diamondId, registry));
+
+        // Mismatched coords (e.g. wrong slot pointing to this chunk)
+        assertFalse(FastChunkVerifier.verifyChunkCoordinates(buf, -121, 4014));
+        assertFalse(FastChunkVerifier.verifyChunkCoordinates(buf, -108, 4019));
+        assertFalse(FastChunkVerifier.verifyChunkVoxel(buf, -121, 4014, 5, 5, 5, diamondId, registry));
+    }
 }

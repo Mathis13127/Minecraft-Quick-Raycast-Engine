@@ -88,4 +88,31 @@ public class SectorAllocatorTest {
         assertEquals(allocator.getLocation(50), loaded.getLocation(50));
         assertEquals(allocator.getLocation(1000), loaded.getLocation(1000));
     }
+
+    @Test
+    @DisplayName("Verify atomic snapshot capture and rollback")
+    void testSnapshotAndRollback() {
+        SectorAllocator allocator = new SectorAllocator();
+        allocator.allocate(5, 2);
+        allocator.allocate(10, 4);
+
+        int loc5_before = allocator.getLocation(5);
+        int loc10_before = allocator.getLocation(10);
+
+        SectorAllocator.Snapshot snapshot = allocator.createSnapshot();
+
+        // Mutate allocator: allocate new chunk and relocate chunk 10
+        allocator.allocate(20, 3);
+        allocator.allocate(10, 8);
+
+        assertTrue(allocator.hasChunk(20));
+        assertNotEquals(loc10_before, allocator.getLocation(10));
+
+        // Restore snapshot
+        allocator.restoreSnapshot(snapshot);
+
+        assertFalse(allocator.hasChunk(20), "Chunk 20 should be rolled back");
+        assertEquals(loc5_before, allocator.getLocation(5), "Chunk 5 should match pre-snapshot location");
+        assertEquals(loc10_before, allocator.getLocation(10), "Chunk 10 should match pre-snapshot location");
+    }
 }

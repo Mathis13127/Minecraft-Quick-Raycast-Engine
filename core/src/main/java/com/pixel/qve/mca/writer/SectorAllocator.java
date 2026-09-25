@@ -201,4 +201,31 @@ public final class SectorAllocator {
     public int getFileSizeInSectors() {
         return Math.max(HEADER_SECTORS, occupiedSectors.length());
     }
+
+    /**
+     * Immutable snapshot of the sector allocation state for transaction staging and rollback.
+     */
+    public record Snapshot(int[] locations, int[] timestamps, BitSet occupiedSectors) {}
+
+    /**
+     * Creates an atomic snapshot of current sector allocations and timestamps.
+     *
+     * @return Snapshot instance
+     */
+    public Snapshot createSnapshot() {
+        return new Snapshot(locations.clone(), timestamps.clone(), (BitSet) occupiedSectors.clone());
+    }
+
+    /**
+     * Restores sector allocations and timestamps from a previously created snapshot.
+     *
+     * @param snapshot Snapshot to restore
+     */
+    public void restoreSnapshot(Snapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot cannot be null");
+        System.arraycopy(snapshot.locations(), 0, this.locations, 0, CHUNKS_PER_REGION);
+        System.arraycopy(snapshot.timestamps(), 0, this.timestamps, 0, CHUNKS_PER_REGION);
+        this.occupiedSectors.clear();
+        this.occupiedSectors.or(snapshot.occupiedSectors());
+    }
 }

@@ -471,4 +471,14 @@ public class VoxelWriteAPITest {
         assertEquals(WriteStatus.FAIL_VERIFICATION_MISMATCH, batchRes.results().get(1).status());
         assertFalse(batchRes.results().get(1).isVerified());
     }
+
+    @Test
+    @DisplayName("Verify MinecraftRegionFileBridge handles null level or uninitialized storage safely")
+    void testRegionFileBridgeNullSafety() {
+        assertFalse(com.pixel.qve.neoforge.bridge.writer.MinecraftRegionFileBridge.evictAndFlushRegion(null, 0, 0));
+        assertFalse(com.pixel.qve.neoforge.bridge.writer.MinecraftRegionFileBridge.evictAndFlushRegions(null, List.of(0L)));
+
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        assertFalse(com.pixel.qve.neoforge.bridge.writer.MinecraftRegionFileBridge.evictAndFlushRegion(mockLevel, 0, 0));
+    }
 }

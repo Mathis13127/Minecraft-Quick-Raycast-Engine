@@ -370,6 +370,104 @@ public final class McaRegionWriter implements Closeable {
         channel.force(metaData);
     }
 
+    /**
+     * Creates an atomic snapshot of the current sector allocation state.
+     *
+     * @return SectorAllocator.Snapshot
+     */
+    public synchronized SectorAllocator.Snapshot snapshotAllocator() {
+        return allocator.createSnapshot();
+    }
+
+    /**
+     * Restores the sector allocation state from a previously captured snapshot.
+     *
+     * @param snapshot Snapshot to restore
+     */
+    public synchronized void restoreAllocator(SectorAllocator.Snapshot snapshot) {
+        allocator.restoreSnapshot(snapshot);
+    }
+
+    /**
+     * Reads raw allocated sector bytes for a local chunk index without decompression.
+     * Used for transaction rollback staging.
+     *
+     * @param localIndex Local chunk index [0..1023]
+     * @return Raw sector bytes, or null if chunk not present or corrupted
+     */
+    public synchronized byte[] readChunkRaw(int localIndex) {
+        if (localIndex < 0 || localIndex >= SectorAllocator.CHUNKS_PER_REGION) {
+            return null;
+        }
+        int loc = allocator.getLocation(localIndex);
+        int sectorOffset = (loc >>> 8) & 0xFFFFFF;
+        int sectorCount = loc & 0xFF;
+        if (sectorOffset < 2 || sectorCount <= 0) {
+            return null;
+        }
+
+        long filePos = (long) sectorOffset * 4096L;
+        int byteCount = sectorCount * 4096;
+        try {
+            if (filePos + 5 > channel.size()) {
+                return null;
+            }
+            int toRead = (int) Math.min(byteCount, channel.size() - filePos);
+            ByteBuffer buf = ByteBuffer.allocate(toRead);
+            channel.read(buf, filePos);
+            return buf.array();
+        } catch (IOException e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to read raw chunk ({0}) for rollback staging: {1}", localIndex, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Writes raw bytes back to the specified sector offset on disk.
+     * Used during transaction rollback to restore original chunk sector data.
+     *
+     * @param sectorOffset Target sector offset
+     * @param rawBytes     Raw sector bytes to write
+     * @throws IOException If write fails
+     */
+    public synchronized void writeChunkRaw(int sectorOffset, byte[] rawBytes) throws IOException {
+        if (sectorOffset < 2 || rawBytes == null || rawBytes.length == 0) {
+            return;
+        }
+        ByteBuffer buf = ByteBuffer.wrap(rawBytes);
+        channel.write(buf, (long) sectorOffset * 4096L);
+    }
+
+    /**
+     * Atomically rolls back this region file to a previous snapshot state, restoring any overwritten
+     * sector payloads, restoring the 8KB header, and flushing to persistent storage.
+     *
+     * @param snapshot         Allocation snapshot to restore
+     * @param rollbackPayloads Map of localIndex to original raw sector bytes
+     * @throws IOException If rollback write fails
+     */
+    public synchronized void rollback(SectorAllocator.Snapshot snapshot, java.util.Map<Integer, byte[]> rollbackPayloads) throws IOException {
+        Objects.requireNonNull(snapshot, "snapshot cannot be null");
+        if (rollbackPayloads != null) {
+            for (java.util.Map.Entry<Integer, byte[]> entry : rollbackPayloads.entrySet()) {
+                int localIndex = entry.getKey();
+                byte[] rawBytes = entry.getValue();
+                if (rawBytes != null && localIndex >= 0 && localIndex < SectorAllocator.CHUNKS_PER_REGION) {
+                    int oldLoc = snapshot.locations()[localIndex];
+                    int oldOffset = (oldLoc >>> 8) & 0xFFFFFF;
+                    if (oldOffset >= 2) {
+                        writeChunkRaw(oldOffset, rawBytes);
+                    }
+                }
+            }
+        }
+        allocator.restoreSnapshot(snapshot);
+        syncHeader();
+        channel.force(true);
+        LOGGER.log(System.Logger.Level.INFO, "Rolled back region r.{0}.{1}.mca to pre-transaction state", regionX, regionZ);
+    }
+
     @Override
     public synchronized void close() throws IOException {
         try {

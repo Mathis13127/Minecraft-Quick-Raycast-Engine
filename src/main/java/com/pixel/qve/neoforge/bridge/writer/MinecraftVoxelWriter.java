@@ -262,7 +262,12 @@ public final class MinecraftVoxelWriter implements Closeable {
             );
         }
 
-        // 5. Submit write to worker pool
+        // 5. Evict Minecraft's cached RegionFile handle to avoid stale header desynchronization
+        if (level instanceof ServerLevel sl) {
+            MinecraftRegionFileBridge.evictAndFlushRegion(sl, chunkX >> 5, chunkZ >> 5);
+        }
+
+        // 6. Submit write to worker pool
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
         return coordinator.writeChunkAsync(chunkX, chunkZ, context.getSections(), context.getBlockEntities())
                 .thenApply(metrics -> {
@@ -322,8 +327,8 @@ public final class MinecraftVoxelWriter implements Closeable {
             if (payload == null) {
                 return expectedBlockId == BlockIdRegistry.AIR_ID;
             }
-            return com.pixel.qve.mca.writer.FastChunkVerifier.verifyVoxel(
-                    payload, localX, worldY, localZ, expectedBlockId, MinecraftVoxelBridge.getBlockRegistry());
+            return com.pixel.qve.mca.writer.FastChunkVerifier.verifyChunkVoxel(
+                    payload, chunkX, chunkZ, localX, worldY, localZ, expectedBlockId, MinecraftVoxelBridge.getBlockRegistry());
         } catch (Exception e) {
             LOGGER.warn("Physical disk verification failed for chunk ({}, {}): {}", chunkX, chunkZ, e.getMessage());
             return false;
@@ -485,6 +490,11 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
 
+        // Evict Minecraft's cached RegionFile handle to avoid stale header desynchronization
+        if (level instanceof ServerLevel sl) {
+            MinecraftRegionFileBridge.evictAndFlushRegion(sl, rx, rz);
+        }
+
         return coordinator.writeRegionBatchAsync(rx, rz, tasks).thenCombine(
                 CompletableFuture.allOf(ramFutures.toArray(new CompletableFuture[0])),
                 (metricsList, v) -> {
@@ -561,11 +571,17 @@ public final class MinecraftVoxelWriter implements Closeable {
         long t0 = System.nanoTime();
         CompletableFuture<WriteResult> future = new CompletableFuture<>();
         Runnable task = () -> {
+            record AppliedRamMutation(BlockPos pos, BlockState previousState, CompoundTag previousBeNbt) {}
+            List<AppliedRamMutation> applied = new ArrayList<>();
             try {
                 for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
                     BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
                     BlockState cur = level.getBlockState(pos);
                     if (m.matchesFilter(-1, cur)) {
+                        BlockEntity oldBe = level.getBlockEntity(pos);
+                        CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
+                        applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
+
                         level.setBlock(pos, m.targetState(), 2 | 16);
                         if (m.tagNbt() != null) {
                             BlockEntity be = level.getBlockEntity(pos);
@@ -587,6 +603,23 @@ public final class MinecraftVoxelWriter implements Closeable {
                 long elapsed = System.nanoTime() - t0;
                 future.complete(WriteResult.successRam(edits.getChunkX(), edits.getChunkZ(), elapsed));
             } catch (Throwable t) {
+                LOGGER.error("Error applying chunk edits in RAM for ({}, {}), rolling back: {}",
+                        edits.getChunkX(), edits.getChunkZ(), t.getMessage(), t);
+                for (int i = applied.size() - 1; i >= 0; i--) {
+                    AppliedRamMutation arm = applied.get(i);
+                    try {
+                        level.setBlock(arm.pos(), arm.previousState(), 2 | 16);
+                        if (arm.previousBeNbt() != null) {
+                            BlockEntity be = level.getBlockEntity(arm.pos());
+                            if (be != null) {
+                                be.loadWithComponents(arm.previousBeNbt(), level.registryAccess());
+                                be.setChanged();
+                            }
+                        }
+                    } catch (Throwable rbEx) {
+                        LOGGER.error("Failed to rollback RAM mutation at {}: {}", arm.pos(), rbEx.getMessage());
+                    }
+                }
                 future.complete(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.getChunkX(), edits.getChunkZ(), t.getMessage()));
             }
         };

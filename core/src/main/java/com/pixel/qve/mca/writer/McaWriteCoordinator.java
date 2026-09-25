@@ -149,61 +149,100 @@ public final class McaWriteCoordinator implements Closeable {
         lock.lock();
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
-            List<McaRegionWriter.WriteMetrics> metricsList = new ArrayList<>(chunks.size());
-
-            for (int i = 0; i < chunks.size(); i++) {
-                ChunkWriteTask task = chunks.get(i);
-                long startTime = System.nanoTime();
+            SectorAllocator.Snapshot snapshot = writer.snapshotAllocator();
+            Map<Integer, byte[]> rollbackPayloads = new HashMap<>();
+            for (ChunkWriteTask task : chunks) {
                 int localX = task.chunkX() & 31;
                 int localZ = task.chunkZ() & 31;
+                int localIndex = localX + localZ * 32;
+                rollbackPayloads.putIfAbsent(localIndex, writer.readChunkRaw(localIndex));
+            }
 
-                // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
-                FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
-                boolean patched = false;
-                if (writer.hasChunk(localX, localZ)) {
-                    java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
-                    if (existingPayload != null) {
+            List<McaRegionWriter.WriteMetrics> metricsList = new ArrayList<>(chunks.size());
+
+            try {
+                for (int i = 0; i < chunks.size(); i++) {
+                    ChunkWriteTask task = chunks.get(i);
+                    long startTime = System.nanoTime();
+                    int localX = task.chunkX() & 31;
+                    int localZ = task.chunkZ() & 31;
+
+                    // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
+                    FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
+                    boolean patched = false;
+                    if (writer.hasChunk(localX, localZ)) {
+                        java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
+                        if (existingPayload != null) {
+                            try {
+                                FastChunkNbtPatcher.patchChunk(
+                                        existingPayload,
+                                        task.chunkX(), task.chunkZ(),
+                                        minSectionY, maxSectionY,
+                                        registry,
+                                        task.sections(),
+                                        task.blockEntities(),
+                                        nbtWriter
+                                );
+                                patched = true;
+                            } catch (Exception e) {
+                                LOGGER.log(System.Logger.Level.WARNING,
+                                        "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
+                                        task.chunkX(), task.chunkZ(), rx, rz, e.getMessage());
+                                nbtWriter.reset();
+                            }
+                        }
+                    }
+                    if (!patched) {
+                        FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
+                    }
+                    byte[] uncompressed = nbtWriter.toByteArray();
+
+                    // 2. Write payload to sector, deferring header sync
+                    McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, false);
+                    metricsList.add(metrics);
+
+                    // 3. Notify listeners
+                    long duration = System.nanoTime() - startTime;
+                    for (IChunkWriteListener listener : listeners) {
                         try {
-                            FastChunkNbtPatcher.patchChunk(
-                                    existingPayload,
-                                    task.chunkX(), task.chunkZ(),
-                                    minSectionY, maxSectionY,
-                                    registry,
-                                    task.sections(),
-                                    task.blockEntities(),
-                                    nbtWriter
-                            );
-                            patched = true;
-                        } catch (Exception e) {
-                            LOGGER.log(System.Logger.Level.WARNING,
-                                    "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
-                                    task.chunkX(), task.chunkZ(), rx, rz, e.getMessage());
-                            nbtWriter.reset();
+                            listener.onChunkWritten(task.chunkX(), task.chunkZ(), duration, metrics);
+                        } catch (Throwable t) {
+                            LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
                         }
                     }
                 }
-                if (!patched) {
-                    FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
-                }
-                byte[] uncompressed = nbtWriter.toByteArray();
 
-                // 2. Write payload, syncing header only on the last chunk
-                boolean isLast = (i == chunks.size() - 1);
-                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, isLast);
-                metricsList.add(metrics);
-
-                // 3. Notify listeners
-                long duration = System.nanoTime() - startTime;
-                for (IChunkWriteListener listener : listeners) {
-                    try {
-                        listener.onChunkWritten(task.chunkX(), task.chunkZ(), duration, metrics);
-                    } catch (Throwable t) {
-                        LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
+                // 4. Pre-commit verification: verify coordinates of every written chunk
+                for (ChunkWriteTask task : chunks) {
+                    int localX = task.chunkX() & 31;
+                    int localZ = task.chunkZ() & 31;
+                    java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
+                    if (verifyPayload == null) {
+                        throw new IOException("Pre-commit verification failed: chunk (" + task.chunkX() + ", " + task.chunkZ() + ") cannot be read back");
+                    }
+                    if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, task.chunkX(), task.chunkZ())) {
+                        throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
                     }
                 }
-            }
 
-            return metricsList;
+                // 5. Commit: sync 8KB header and flush
+                writer.syncHeaderOnly();
+                writer.flush(false);
+
+                return metricsList;
+            } catch (Throwable t) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "Batch write failed for region r.{0}.{1}.mca, initiating automatic rollback: {2}",
+                        rx, rz, t.getMessage());
+                try {
+                    writer.rollback(snapshot, rollbackPayloads);
+                } catch (Throwable rbEx) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "Critical: Rollback failed for region r.{0}.{1}.mca: {2}", rx, rz, rbEx.getMessage());
+                    t.addSuppressed(rbEx);
+                }
+                throw (t instanceof IOException ioe) ? ioe : new IOException("Region batch write failed and was rolled back", t);
+            }
         } finally {
             lock.unlock();
         }
@@ -243,57 +282,91 @@ public final class McaWriteCoordinator implements Closeable {
         int rz = chunkZ >> 5;
         int localX = chunkX & 31;
         int localZ = chunkZ & 31;
+        int localIndex = localX + localZ * 32;
         long rKey = regionKey(rx, rz);
 
         ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
         lock.lock();
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
+            SectorAllocator.Snapshot snapshot = writer.snapshotAllocator();
+            byte[] oldRaw = writer.readChunkRaw(localIndex);
 
-            // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
-            FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
-            boolean patched = false;
-            if (writer.hasChunk(localX, localZ)) {
-                java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
-                if (existingPayload != null) {
-                    try {
-                        FastChunkNbtPatcher.patchChunk(
-                                existingPayload,
-                                chunkX, chunkZ,
-                                minSectionY, maxSectionY,
-                                registry,
-                                sections,
-                                blockEntities,
-                                nbtWriter
-                        );
-                        patched = true;
-                    } catch (Exception e) {
-                        LOGGER.log(System.Logger.Level.WARNING,
-                                "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
-                                chunkX, chunkZ, rx, rz, e.getMessage());
-                        nbtWriter.reset();
+            try {
+                // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
+                FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
+                boolean patched = false;
+                if (writer.hasChunk(localX, localZ)) {
+                    java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
+                    if (existingPayload != null) {
+                        try {
+                            FastChunkNbtPatcher.patchChunk(
+                                    existingPayload,
+                                    chunkX, chunkZ,
+                                    minSectionY, maxSectionY,
+                                    registry,
+                                    sections,
+                                    blockEntities,
+                                    nbtWriter
+                            );
+                            patched = true;
+                        } catch (Exception e) {
+                            LOGGER.log(System.Logger.Level.WARNING,
+                                    "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
+                                    chunkX, chunkZ, rx, rz, e.getMessage());
+                            nbtWriter.reset();
+                        }
                     }
                 }
-            }
-            if (!patched) {
-                FastChunkNbtWriter.writeChunk(nbtWriter, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities);
-            }
-            byte[] uncompressed = nbtWriter.toByteArray();
-
-            // 2. Compress and write payload to region file
-            McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed);
-
-            // 3. Notify listeners
-            long duration = System.nanoTime() - startTime;
-            for (IChunkWriteListener listener : listeners) {
-                try {
-                    listener.onChunkWritten(chunkX, chunkZ, duration, metrics);
-                } catch (Throwable t) {
-                    LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
+                if (!patched) {
+                    FastChunkNbtWriter.writeChunk(nbtWriter, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities);
                 }
-            }
+                byte[] uncompressed = nbtWriter.toByteArray();
 
-            return metrics;
+                // 2. Compress and write payload to region file (defer header sync)
+                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, false);
+
+                // 3. Pre-commit coordinate verification
+                java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
+                if (verifyPayload == null) {
+                    throw new IOException("Pre-commit verification failed: chunk (" + chunkX + ", " + chunkZ + ") cannot be read back");
+                }
+                if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, chunkX, chunkZ)) {
+                    throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + chunkX + ", " + chunkZ + ")");
+                }
+
+                // 4. Commit header
+                writer.syncHeaderOnly();
+                writer.flush(false);
+
+                // 5. Notify listeners
+                long duration = System.nanoTime() - startTime;
+                for (IChunkWriteListener listener : listeners) {
+                    try {
+                        listener.onChunkWritten(chunkX, chunkZ, duration, metrics);
+                    } catch (Throwable t) {
+                        LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
+                    }
+                }
+
+                return metrics;
+            } catch (Throwable t) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "Chunk write failed for ({0}, {1}) in region r.{2}.{3}.mca, rolling back: {4}",
+                        chunkX, chunkZ, rx, rz, t.getMessage());
+                try {
+                    Map<Integer, byte[]> rollbackMap = new HashMap<>();
+                    if (oldRaw != null) {
+                        rollbackMap.put(localIndex, oldRaw);
+                    }
+                    writer.rollback(snapshot, rollbackMap);
+                } catch (Throwable rbEx) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "Critical: Rollback failed for region r.{0}.{1}.mca: {2}", rx, rz, rbEx.getMessage());
+                    t.addSuppressed(rbEx);
+                }
+                throw (t instanceof IOException ioe) ? ioe : new IOException("Chunk write failed and was rolled back", t);
+            }
         } finally {
             lock.unlock();
         }
@@ -335,7 +408,7 @@ public final class McaWriteCoordinator implements Closeable {
                 return expectedBlockId == BlockIdRegistry.AIR_ID;
             }
 
-            return FastChunkVerifier.verifyVoxel(payload, localX, worldY, localZ, expectedBlockId, registry);
+            return FastChunkVerifier.verifyChunkVoxel(payload, chunkX, chunkZ, localX, worldY, localZ, expectedBlockId, registry);
         } catch (Exception e) {
             LOGGER.log(System.Logger.Level.WARNING,
                     "Failed to verify voxel ({0}, {1}, {2}) in chunk ({3}, {4}): {5}",

@@ -166,4 +166,61 @@ public class McaRoundTripTest {
             assertEquals(1, parsedBlocks.get(), "Must have parsed the emerald block section");
         }
     }
+
+    @Test
+    @DisplayName("Verify McaRegionWriter rollback restores previous header and payload state")
+    void testRegionRollback(@TempDir Path tempDir) throws Exception {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int stoneId = registry.getOrRegister("minecraft:stone");
+        int diamondId = registry.getOrRegister("minecraft:diamond_block");
+
+        Path mcaFile = tempDir.resolve("r.0.0.mca");
+
+        // 1. Initial state: chunk (0, 0) has stone
+        VoxelSection stoneSection = new VoxelSection();
+        stoneSection.setVoxel(0, 0, 0, true, stoneId);
+        try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            coordinator.writeChunkSync(0, 0, Map.of(0, stoneSection), null);
+            assertTrue(coordinator.verifyVoxel(0, 0, 0, 0, 0, stoneId));
+            assertFalse(coordinator.hasChunk(1, 0));
+        }
+
+        // 2. Open writer directly, capture snapshot and old raw payload
+        try (com.pixel.qve.mca.writer.McaRegionWriter writer = new com.pixel.qve.mca.writer.McaRegionWriter(mcaFile)) {
+            var snapshot = writer.snapshotAllocator();
+            byte[] oldRaw = writer.readChunkRaw(0);
+            assertNotNull(oldRaw);
+
+            // Mutate chunk 0 to diamond and create chunk 1
+            com.pixel.qve.mca.writer.FastNbtWriter nbtWriter = new com.pixel.qve.mca.writer.FastNbtWriter();
+            VoxelSection diamondSection = new VoxelSection();
+            diamondSection.setVoxel(0, 0, 0, true, diamondId);
+            com.pixel.qve.mca.writer.FastChunkNbtWriter.writeChunk(nbtWriter, 0, 0, -4, 19, registry, Map.of(0, diamondSection), null);
+            writer.writeChunk(0, 0, nbtWriter.toByteArray(), false);
+
+            nbtWriter.reset();
+            com.pixel.qve.mca.writer.FastChunkNbtWriter.writeChunk(nbtWriter, 1, 0, -4, 19, registry, Map.of(0, diamondSection), null);
+            writer.writeChunk(1, 0, nbtWriter.toByteArray(), false);
+
+            assertTrue(writer.hasChunk(1, 0), "Chunk 1 should exist before rollback");
+
+            // 3. Trigger rollback
+            writer.rollback(snapshot, Map.of(0, oldRaw));
+
+            assertFalse(writer.hasChunk(1, 0), "Chunk 1 must not exist after rollback");
+            assertTrue(writer.hasChunk(0, 0), "Chunk 0 must exist after rollback");
+        }
+
+        // 4. Verify on disk with fresh reader
+        try (McaRegionReader reader = new McaRegionReader(mcaFile, registry)) {
+            assertFalse(reader.hasChunk(1, 0), "Chunk 1 must not exist on disk");
+            assertTrue(reader.hasChunk(0, 0), "Chunk 0 must exist on disk");
+
+            reader.readChunk(0, 0, (secY, sec) -> {
+                if (secY == 0) {
+                    assertEquals(stoneId, sec.getBlockId(0, 0, 0), "Chunk 0 must be restored to stone");
+                }
+            });
+        }
+    }
 }
