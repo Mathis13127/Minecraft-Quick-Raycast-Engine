@@ -481,4 +481,36 @@ public class VoxelWriteAPITest {
         ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
         assertFalse(com.pixel.qve.neoforge.bridge.writer.MinecraftRegionFileBridge.evictAndFlushRegion(mockLevel, 0, 0));
     }
+
+    @Test
+    @DisplayName("ChunkExclusivityGuard detects in-memory residency via ChunkMap visible chunks")
+    void testChunkExclusivityGuardChunkMapVisibleResidency() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        ServerChunkCache mockScc = org.mockito.Mockito.mock(ServerChunkCache.class);
+        net.minecraft.server.level.ChunkMap mockChunkMap = org.mockito.Mockito.mock(net.minecraft.server.level.ChunkMap.class);
+        net.minecraft.server.level.ChunkHolder mockHolder = org.mockito.Mockito.mock(net.minecraft.server.level.ChunkHolder.class);
+
+        org.mockito.Mockito.when(mockLevel.getChunkSource()).thenReturn(mockScc);
+        org.mockito.Mockito.when(mockLevel.dimension()).thenReturn(net.minecraft.world.level.Level.OVERWORLD);
+        org.mockito.Mockito.when(mockScc.hasChunk(10, 20)).thenReturn(false);
+        org.mockito.Mockito.when(mockScc.getChunkNow(10, 20)).thenReturn(null);
+
+        // Reflectively set or verify scc.chunkMap
+        try {
+            java.lang.reflect.Field cmField = ServerChunkCache.class.getDeclaredField("chunkMap");
+            cmField.setAccessible(true);
+            cmField.set(mockScc, mockChunkMap);
+        } catch (Exception e) {
+            // If field cannot be set directly on mock, test fallback
+        }
+
+        long posLong = ChunkPos.asLong(10, 20);
+        org.mockito.Mockito.when(mockChunkMap.getVisibleChunkIfPresent(posLong)).thenReturn(mockHolder);
+
+        // When visible in ChunkMap, isChunkLoadedInRam MUST return true
+        assertTrue(ChunkExclusivityGuard.isChunkLoadedInRam(mockLevel, 10, 20));
+        assertFalse(ChunkExclusivityGuard.isSafeForDirectDiskWrite(mockLevel, 10, 20));
+        assertThrows(ChunkExclusivityGuard.ChunkLoadedInRamException.class,
+                () -> ChunkExclusivityGuard.assertSafeForDirectDiskWrite(mockLevel, 10, 20));
+    }
 }

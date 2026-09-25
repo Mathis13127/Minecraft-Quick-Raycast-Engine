@@ -1,5 +1,7 @@
 package com.pixel.qve.neoforge.bridge.writer;
 
+import com.pixel.qve.neoforge.mixin.ChunkMapAccessor;
+import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
@@ -34,11 +36,38 @@ public final class ChunkExclusivityGuard {
             if (scc == null) {
                 return false;
             }
+            // 1. Check active ticking status
             if (scc.hasChunk(chunkX, chunkZ)) {
                 return true;
             }
             if (scc.getChunkNow(chunkX, chunkZ) != null) {
                 return true;
+            }
+
+            // 2. Check full ChunkMap memory residency (border chunks, proto-chunks, and pending unloads)
+            ChunkMap chunkMap = scc.chunkMap;
+            if (chunkMap != null) {
+                long posLong = ChunkPos.asLong(chunkX, chunkZ);
+
+                // Visible/distance-tracked chunks (volatile, O(1))
+                if (chunkMap.getVisibleChunkIfPresent(posLong) != null) {
+                    return true;
+                }
+
+                // Internal updating and pending unloads maps via ChunkMapAccessor
+                try {
+                    ChunkMapAccessor accessor = (ChunkMapAccessor) chunkMap;
+                    var updating = accessor.qve$getUpdatingChunkMap();
+                    if (updating != null && updating.containsKey(posLong)) {
+                        return true;
+                    }
+                    var unloads = accessor.qve$getPendingUnloads();
+                    if (unloads != null && unloads.containsKey(posLong)) {
+                        return true;
+                    }
+                } catch (Throwable t) {
+                    LOGGER.warn("Failed to inspect ChunkMapAccessor for chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage());
+                }
             }
             return false;
         }
@@ -85,8 +114,11 @@ public final class ChunkExclusivityGuard {
      */
     public static void assertSafeForDirectDiskWrite(Level level, int chunkX, int chunkZ) {
         if (isChunkLoadedInRam(level, chunkX, chunkZ)) {
+            String dimName = (level.dimension() != null && level.dimension().location() != null)
+                    ? level.dimension().location().toString()
+                    : "unknown";
             String msg = String.format("Direct MCA disk write rejected: chunk (%d, %d) in dimension %s is currently LOADED in RAM!",
-                    chunkX, chunkZ, level.dimension().location());
+                    chunkX, chunkZ, dimName);
             LOGGER.error(msg);
             throw new ChunkLoadedInRamException(msg);
         }

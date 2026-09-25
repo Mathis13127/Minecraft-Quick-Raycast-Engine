@@ -564,7 +564,10 @@ public final class ChunkWriteBatch {
                                 applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
 
                                 // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
-                                level.setBlock(pos, m.targetState(), 2 | 16);
+                                boolean placed = level.setBlock(pos, m.targetState(), 2 | 16);
+                                if (!placed) {
+                                    throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + m.targetState());
+                                }
                                 if (m.tagNbt() != null) {
                                     BlockEntity be = level.getBlockEntity(pos);
                                     if (be != null) {
@@ -726,7 +729,10 @@ public final class ChunkWriteBatch {
                     BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
                     BlockState cur = level.getBlockState(pos);
                     if (m.matchesFilter(-1, cur)) {
-                        level.setBlock(pos, m.targetState(), 2 | 16);
+                        boolean placed = level.setBlock(pos, m.targetState(), 2 | 16);
+                        if (!placed) {
+                            throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + m.targetState());
+                        }
                         if (m.tagNbt() != null) {
                             BlockEntity be = level.getBlockEntity(pos);
                             if (be != null) {

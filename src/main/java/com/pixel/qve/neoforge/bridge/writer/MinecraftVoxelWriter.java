@@ -582,7 +582,10 @@ public final class MinecraftVoxelWriter implements Closeable {
                         CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
                         applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
 
-                        level.setBlock(pos, m.targetState(), 2 | 16);
+                        boolean placed = level.setBlock(pos, m.targetState(), 2 | 16);
+                        if (!placed) {
+                            throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + m.targetState());
+                        }
                         if (m.tagNbt() != null) {
                             BlockEntity be = level.getBlockEntity(pos);
                             if (be != null) {
@@ -649,7 +652,10 @@ public final class MinecraftVoxelWriter implements Closeable {
         Runnable task = () -> {
             try {
                 // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
-                level.setBlock(pos, state, flags | 16);
+                boolean placed = level.setBlock(pos, state, flags | 16);
+                if (!placed) {
+                    throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + state);
+                }
                 if (blockEntityNbt != null) {
                     BlockEntity be = level.getBlockEntity(pos);
                     if (be != null) {
@@ -725,7 +731,11 @@ public final class MinecraftVoxelWriter implements Closeable {
                                                     net.minecraft.resources.ResourceLocation.tryParse(MinecraftVoxelBridge.getBlockRegistry().getName(blockId))
                                               ).defaultBlockState()
                                             : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
-                                    level.setBlock(new BlockPos((chunkX << 4) | x, baseY + y, (chunkZ << 4) | z), bs, 2);
+                                    BlockPos bPos = new BlockPos((chunkX << 4) | x, baseY + y, (chunkZ << 4) | z);
+                                    boolean placed = level.setBlock(bPos, bs, 2 | 16);
+                                    if (!placed) {
+                                        throw new IllegalStateException("Failed to place block in RAM at " + bPos + " with state " + bs);
+                                    }
                                 }
                             }
                         }

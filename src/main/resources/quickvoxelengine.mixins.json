@@ -5,6 +5,7 @@
   "mixins": [
     "LevelChunkSectionMixin",
     "ChunkStorageAccessor",
+    "ChunkMapAccessor",
     "IOWorkerAccessor",
     "RegionFileStorageAccessor"
   ],
