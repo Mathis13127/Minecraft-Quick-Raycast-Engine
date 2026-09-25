@@ -24,7 +24,9 @@ import java.util.Objects;
  * Live Minecraft IVoxelGrid implementation backed by UnifiedVoxelCache and on-demand
  * section compilation. Seamlessly unites live chunks in RAM and offline chunks on disk.
  */
-public final class MinecraftVoxelGrid implements IVoxelGrid {
+public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
+
+    private static final System.Logger LOGGER = System.getLogger(MinecraftVoxelGrid.class.getName());
 
     private final Level level;
     private final UnifiedVoxelCache cache;
@@ -144,23 +146,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
 
         LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
-            VoxelChunkColumn newCol = cache.getOrCreateColumn(chunkX, chunkZ);
-            populateHeightmapIfEmpty(chunk, newCol, chunkX, chunkZ);
-
-            int minSecY = level.getMinSection();
-            int maxSecY = level.getMaxSection();
-            LevelChunkSection[] sections = chunk.getSections();
-            for (int sy = minSecY; sy <= maxSecY; sy++) {
-                int blockY = sy << 4;
-                int secIdx = chunk.getSectionIndex(blockY);
-                if (secIdx >= 0 && secIdx < sections.length) {
-                    LevelChunkSection sec = sections[secIdx];
-                    if (sec != null && !sec.hasOnlyAir()) {
-                        MinecraftVoxelBridge.compileSection(sec, newCol, sy);
-                    }
-                }
-            }
-            return newCol;
+            return ingestChunk(chunk);
         }
 
         IVoxelWorld diskFallback = cache.getDiskFallback();
@@ -195,6 +181,38 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
         if (highest != Heightmap2D.VOID_Y) {
             cache.updateChunkHeightmap(chunkX, chunkZ, highest);
         }
+    }
+
+    /**
+     * Ingests a live Minecraft LevelChunk directly into the UnifiedVoxelCache,
+     * populating the heightmap and compiling all non-empty sections.
+     *
+     * @param chunk Live LevelChunk
+     * @return The populated VoxelChunkColumn, or null if chunk is null
+     */
+    public VoxelChunkColumn ingestChunk(LevelChunk chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        int chunkX = chunk.getPos().x;
+        int chunkZ = chunk.getPos().z;
+        VoxelChunkColumn newCol = cache.getOrCreateColumn(chunkX, chunkZ);
+        populateHeightmapIfEmpty(chunk, newCol, chunkX, chunkZ);
+
+        int minSecY = level.getMinSection();
+        int maxSecY = level.getMaxSection();
+        LevelChunkSection[] sections = chunk.getSections();
+        for (int sy = minSecY; sy <= maxSecY; sy++) {
+            int blockY = sy << 4;
+            int secIdx = chunk.getSectionIndex(blockY);
+            if (secIdx >= 0 && secIdx < sections.length) {
+                LevelChunkSection sec = sections[secIdx];
+                if (sec != null && !sec.hasOnlyAir()) {
+                    MinecraftVoxelBridge.compileSection(sec, newCol, sy);
+                }
+            }
+        }
+        return newCol;
     }
 
     @Override
@@ -432,6 +450,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
                             net.minecraft.nbt.NbtIo.write(tag, new java.io.DataOutputStream(baos));
                             return java.nio.ByteBuffer.wrap(baos.toByteArray());
                         } catch (java.io.IOException e) {
+                            LOGGER.log(System.Logger.Level.WARNING, "Failed to serialize BlockEntity NBT at (" + worldX + ", " + worldY + ", " + worldZ + ")", e);
                             return null;
                         }
                     }
@@ -484,10 +503,16 @@ public final class MinecraftVoxelGrid implements IVoxelGrid {
                     raw.get(bytes);
                     return net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes)));
                 } catch (java.io.IOException e) {
+                    LOGGER.log(System.Logger.Level.WARNING, "Failed to parse NBT CompoundTag for block entity at " + pos, e);
                     return null;
                 }
             }
         }
         return null;
+    }
+
+    @Override
+    public void close() {
+        cache.close();
     }
 }

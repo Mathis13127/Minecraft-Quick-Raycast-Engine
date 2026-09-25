@@ -165,6 +165,7 @@ public final class McaRegionReader implements Closeable {
                 return;
             }
             if (currentSize > mmap.capacity()) {
+                DirectBufferCleaner.clean(this.mmap);
                 this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, currentSize);
             }
             MappedByteBuffer curMmap = this.mmap;
@@ -174,7 +175,9 @@ public final class McaRegionReader implements Closeable {
                 int sectorCount = val & 0xFF;
                 sectorOffsets[i] = (sectorCount > 0) ? sectorOffset : 0;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            LOGGER.log(System.Logger.Level.DEBUG,
+                    "Failed to refresh MCA header for {0}: {1}", filePath, t.getMessage());
         }
     }
 
@@ -594,7 +597,12 @@ public final class McaRegionReader implements Closeable {
 
     @Override
     public void close() throws IOException {
-        channel.close();
-        raf.close();
+        DirectBufferCleaner.clean(this.mmap);
+        this.mmap = null;
+        try {
+            channel.close();
+        } finally {
+            raf.close();
+        }
     }
 }

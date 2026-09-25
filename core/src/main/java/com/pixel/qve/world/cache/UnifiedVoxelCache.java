@@ -19,12 +19,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * Unifies in-memory chunks (live Minecraft world) and on-disk chunks (unloaded MCA files)
  * behind a seamless, zero-allocation IVoxelGrid interface.
  */
-public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
+public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable {
+
+    private static final System.Logger LOGGER = System.getLogger(UnifiedVoxelCache.class.getName());
 
     /** Default minimum vertical section Y coordinate (-16, corresponding to Y=-256). */
     public static final int DEFAULT_MIN_SECTION_Y = -16;
     /** Default maximum vertical section Y coordinate (32, corresponding to Y=512). */
     public static final int DEFAULT_MAX_SECTION_Y = 32;
+    /** Default maximum cached chunk columns before LRU eviction. */
+    public static final int DEFAULT_MAX_CACHED_COLUMNS = 262144;
 
     private final BlockIdRegistry blockIdRegistry;
     private final ShapeRegistry shapeRegistry;
@@ -32,10 +36,12 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
     private volatile IVoxelWorld diskFallback;
     private final int minSectionY;
     private final int maxSectionY;
+    private final int maxCachedColumns;
 
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentLinkedDeque<Long> columnEvictionQueue = new java.util.concurrent.ConcurrentLinkedDeque<>();
     private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
-    private static final int L1_SIZE = 1024;
+    private static final int L1_SIZE = 16384;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
@@ -81,7 +87,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param maxSectionY     Maximum vertical section coordinate (exclusive, e.g. 32)
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, IVoxelWorld diskFallback, int minSectionY, int maxSectionY) {
-        this(blockIdRegistry, shapeRegistry, new com.pixel.qve.state.BlockTraitRegistry(), diskFallback, minSectionY, maxSectionY);
+        this(blockIdRegistry, shapeRegistry, new com.pixel.qve.state.BlockTraitRegistry(), diskFallback, minSectionY, maxSectionY, DEFAULT_MAX_CACHED_COLUMNS);
     }
 
     /**
@@ -95,12 +101,28 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param maxSectionY     Maximum vertical section coordinate (exclusive, e.g. 32)
      */
     public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, com.pixel.qve.state.BlockTraitRegistry traitRegistry, IVoxelWorld diskFallback, int minSectionY, int maxSectionY) {
+        this(blockIdRegistry, shapeRegistry, traitRegistry, diskFallback, minSectionY, maxSectionY, DEFAULT_MAX_CACHED_COLUMNS);
+    }
+
+    /**
+     * Constructs a fully customized UnifiedVoxelCache with explicit trait registry, vertical bounds, and cache limits.
+     *
+     * @param blockIdRegistry   Registry mapping block identifiers
+     * @param shapeRegistry     Registry mapping block collision shapes
+     * @param traitRegistry     Registry mapping physical/optical block traits
+     * @param diskFallback      Underlying disk provider for uncached sections
+     * @param minSectionY       Minimum vertical section coordinate (inclusive, e.g. -16)
+     * @param maxSectionY       Maximum vertical section coordinate (exclusive, e.g. 32)
+     * @param maxCachedColumns Maximum cached chunk columns before LRU eviction
+     */
+    public UnifiedVoxelCache(BlockIdRegistry blockIdRegistry, ShapeRegistry shapeRegistry, com.pixel.qve.state.BlockTraitRegistry traitRegistry, IVoxelWorld diskFallback, int minSectionY, int maxSectionY, int maxCachedColumns) {
         this.blockIdRegistry = Objects.requireNonNull(blockIdRegistry, "BlockIdRegistry cannot be null");
         this.shapeRegistry = Objects.requireNonNull(shapeRegistry, "ShapeRegistry cannot be null");
         this.traitRegistry = (traitRegistry != null) ? traitRegistry : new com.pixel.qve.state.BlockTraitRegistry();
         this.diskFallback = diskFallback;
         this.minSectionY = minSectionY;
         this.maxSectionY = maxSectionY;
+        this.maxCachedColumns = Math.max(16, maxCachedColumns);
     }
 
     /**
@@ -169,14 +191,45 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @param sectionZ Section Z coordinate
      * @param section  VoxelSection to store
      */
+    private VoxelChunkColumn getOrCreateColumnInternal(int chunkX, int chunkZ) {
+        long cKey = chunkKey(chunkX, chunkZ);
+        VoxelChunkColumn col = columns.get(cKey);
+        if (col != null) {
+            return col;
+        }
+        VoxelChunkColumn newCol = new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY);
+        VoxelChunkColumn previous = columns.putIfAbsent(cKey, newCol);
+        if (previous != null) {
+            return previous;
+        }
+        columnEvictionQueue.offer(cKey);
+        while (columns.size() > maxCachedColumns) {
+            Long oldest = columnEvictionQueue.poll();
+            if (oldest != null) {
+                columns.remove(oldest);
+            } else {
+                break;
+            }
+        }
+        return newCol;
+    }
+
+    /**
+     * Stores or updates a VoxelSection at the given section coordinates.
+     *
+     * @param sectionX Section X coordinate
+     * @param sectionY Section Y coordinate
+     * @param sectionZ Section Z coordinate
+     * @param section  VoxelSection to store
+     */
     public void putSection(int sectionX, int sectionY, int sectionZ, VoxelSection section) {
         long cKey = chunkKey(sectionX, sectionZ);
-        VoxelChunkColumn column = columns.computeIfAbsent(cKey, k -> new VoxelChunkColumn(sectionX, sectionZ, minSectionY, maxSectionY));
+        VoxelChunkColumn column = getOrCreateColumnInternal(sectionX, sectionZ);
         column.setSection(sectionY, section);
 
         int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
-        l1Keys[slot] = cKey;
         l1Columns[slot] = column;
+        l1Keys[slot] = cKey;
 
         short colHighest = column.getHeightmap().getHighestY();
         if (colHighest > highestWorldY) {
@@ -201,8 +254,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
     public void setVoxel(int worldX, int worldY, int worldZ, boolean solid, int blockId) {
         int chunkX = worldX >> 4;
         int chunkZ = worldZ >> 4;
-        long cKey = chunkKey(chunkX, chunkZ);
-        VoxelChunkColumn column = columns.computeIfAbsent(cKey, k -> new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY));
+        VoxelChunkColumn column = getOrCreateColumnInternal(chunkX, chunkZ);
         column.setVoxel(worldX & 15, worldY, worldZ & 15, solid, blockId);
 
         if (solid && worldY > highestWorldY) {
@@ -265,7 +317,7 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      * @return VoxelChunkColumn instance
      */
     public VoxelChunkColumn getOrCreateColumn(int chunkX, int chunkZ) {
-        return columns.computeIfAbsent(chunkKey(chunkX, chunkZ), k -> new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY));
+        return getOrCreateColumnInternal(chunkX, chunkZ);
     }
 
     @Override
@@ -450,9 +502,22 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld {
      */
     public void clear() {
         columns.clear();
+        columnEvictionQueue.clear();
         java.util.Arrays.fill(l1Keys, 0L);
         java.util.Arrays.fill(l1Columns, null);
         highestWorldY = Short.MIN_VALUE;
+    }
+
+    @Override
+    public void close() {
+        clear();
+        if (diskFallback instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                LOGGER.log(System.Logger.Level.WARNING, "Failed to cleanly close disk fallback in UnifiedVoxelCache", e);
+            }
+        }
     }
 
     @Override

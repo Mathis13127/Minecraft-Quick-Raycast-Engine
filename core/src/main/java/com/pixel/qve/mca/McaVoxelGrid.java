@@ -29,7 +29,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final BlockIdRegistry registry;
     private final OnDemandNbtFetcher nbtFetcher;
     private final Map<Long, VoxelChunkColumn> columnCache = new ConcurrentHashMap<>();
-    private static final int L1_SIZE = 1024;
+    private static final int L1_SIZE = 16384;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
@@ -39,12 +39,21 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
     private final java.util.Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> missingRegions = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> existingRegions = ConcurrentHashMap.newKeySet();
     private final com.pixel.qve.state.ShapeRegistry shapeRegistry;
     private final Path regionDirectory;
     private final short minWorldY;
     private final int minSectionY;
     private final int maxSectionY;
     private volatile short highestWorldY = Short.MIN_VALUE;
+
+    public static final int DEFAULT_MAX_OPEN_REGIONS = 32768;
+    public static final int DEFAULT_MAX_CACHED_COLUMNS = 262144;
+
+    private final int maxOpenRegions;
+    private final int maxCachedColumns;
+    private final java.util.concurrent.ConcurrentLinkedDeque<Long> regionEvictionQueue = new java.util.concurrent.ConcurrentLinkedDeque<>();
+    private final java.util.concurrent.ConcurrentLinkedDeque<Long> columnEvictionQueue = new java.util.concurrent.ConcurrentLinkedDeque<>();
 
     private volatile int minBlockX = Integer.MAX_VALUE;
     private volatile int maxBlockX = Integer.MIN_VALUE;
@@ -90,12 +99,28 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      * @param minWorldY       Minimum world build height (e.g. -64 for overworld, 0 for nether)
      */
     public McaVoxelGrid(BlockIdRegistry registry, com.pixel.qve.state.ShapeRegistry shapeRegistry, Path regionDirectory, short minWorldY) {
+        this(registry, shapeRegistry, regionDirectory, minWorldY, DEFAULT_MAX_OPEN_REGIONS, DEFAULT_MAX_CACHED_COLUMNS);
+    }
+
+    /**
+     * Constructs an McaVoxelGrid with explicit cache limits for memory-constrained environments.
+     *
+     * @param registry         BlockIdRegistry to map block state names
+     * @param shapeRegistry    Optional ShapeRegistry for full-cube classification
+     * @param regionDirectory  Root directory containing .mca region files, or null
+     * @param minWorldY        Minimum world build height (e.g. -64 for overworld, 0 for nether)
+     * @param maxOpenRegions   Maximum simultaneously open MCA region readers before LRU eviction
+     * @param maxCachedColumns Maximum cached chunk columns before LRU eviction
+     */
+    public McaVoxelGrid(BlockIdRegistry registry, com.pixel.qve.state.ShapeRegistry shapeRegistry, Path regionDirectory, short minWorldY, int maxOpenRegions, int maxCachedColumns) {
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
         this.shapeRegistry = (shapeRegistry != null) ? shapeRegistry : new com.pixel.qve.state.ShapeRegistry();
         this.regionDirectory = regionDirectory;
         this.minWorldY = minWorldY;
         this.minSectionY = Math.min(-16, minWorldY >> 4);
         this.maxSectionY = Math.max(32, (minWorldY >> 4) + 48);
+        this.maxOpenRegions = Math.max(1, maxOpenRegions);
+        this.maxCachedColumns = Math.max(16, maxCachedColumns);
         Arrays.fill(this.l1Keys, Long.MIN_VALUE);
         for (int i = 0; i < this.chunkLocks.length; i++) {
             this.chunkLocks[i] = new Object();
@@ -142,14 +167,15 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     public VoxelChunkColumn getColumn(int chunkX, int chunkZ) {
         long cKey = chunkKey(chunkX, chunkZ);
         int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
-        if (l1Keys[slot] == cKey) {
-            return l1Columns[slot];
+        VoxelChunkColumn l1Col = l1Columns[slot];
+        if (l1Keys[slot] == cKey && l1Col != null && l1Col.getChunkX() == chunkX && l1Col.getChunkZ() == chunkZ) {
+            return l1Col;
         }
 
         VoxelChunkColumn col = columnCache.get(cKey);
         if (col != null) {
-            l1Keys[slot] = cKey;
             l1Columns[slot] = col;
+            l1Keys[slot] = cKey;
             return col;
         }
 
@@ -157,30 +183,36 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int rz = chunkZ >> 5;
         long rKey = regionKey(rx, rz);
         if (missingRegions.contains(rKey)) {
-            if (regionDirectory != null && java.nio.file.Files.exists(regionDirectory.resolve("r." + rx + "." + rz + ".mca"))) {
-                missingRegions.remove(rKey);
+            return null;
+        }
+
+        if (!existingRegions.contains(rKey) && !regions.containsKey(rKey)) {
+            if (regionDirectory != null) {
+                Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+                if (!java.nio.file.Files.exists(mcaFile)) {
+                    missingRegions.add(rKey);
+                    return null;
+                }
+                existingRegions.add(rKey);
             } else {
                 return null;
             }
         }
 
-        if (regions.containsKey(rKey) || regionDirectory != null) {
-            try {
-                loadChunk(chunkX, chunkZ);
-                VoxelChunkColumn loadedCol = columnCache.get(cKey);
-                if (loadedCol != null) {
-                    l1Keys[slot] = cKey;
-                    l1Columns[slot] = loadedCol;
-                }
-                return loadedCol;
-            } catch (Exception e) {
-                LOGGER.log(System.Logger.Level.WARNING,
-                        "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
-                        chunkX, chunkZ, rx, rz, e.getMessage());
-                return null;
+        try {
+            loadChunk(chunkX, chunkZ);
+            VoxelChunkColumn loadedCol = columnCache.get(cKey);
+            if (loadedCol != null) {
+                l1Columns[slot] = loadedCol;
+                l1Keys[slot] = cKey;
             }
+            return loadedCol;
+        } catch (Exception e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to lazy-load chunk ({0}, {1}) from region r.{2}.{3}.mca: {4}",
+                    chunkX, chunkZ, rx, rz, e.getMessage());
+            return null;
         }
-        return null;
     }
 
     @Override
@@ -218,6 +250,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         long rk = regionKey(reader.getRegionX(), reader.getRegionZ());
         regions.put(rk, reader);
         missingRegions.remove(rk);
+        existingRegions.add(rk);
         updateBounds(reader.getRegionX(), reader.getRegionZ());
     }
 
@@ -242,6 +275,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                         try {
                             int rx = Integer.parseInt(parts[1]);
                             int rz = Integer.parseInt(parts[2]);
+                            existingRegions.add(regionKey(rx, rz));
                             updateBounds(rx, rz);
                         } catch (NumberFormatException ignored) {}
                     }
@@ -255,13 +289,16 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     @Override
     public boolean isRegionEmpty(int regionX, int regionZ) {
         long rk = regionKey(regionX, regionZ);
-        if (regions.containsKey(rk)) {
+        if (regions.containsKey(rk) || existingRegions.contains(rk)) {
             return false;
+        }
+        if (missingRegions.contains(rk)) {
+            return true;
         }
         if (regionDirectory != null) {
             Path mcaFile = regionDirectory.resolve("r." + regionX + "." + regionZ + ".mca");
             if (java.nio.file.Files.exists(mcaFile)) {
-                missingRegions.remove(rk);
+                existingRegions.add(rk);
                 return false;
             }
             missingRegions.add(rk);
@@ -442,16 +479,30 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             }
 
             if (parsed > 0) {
-                columnCache.put(cKey, column);
+                putColumn(cKey, column);
                 int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
-                l1Keys[slot] = cKey;
                 l1Columns[slot] = column;
+                l1Keys[slot] = cKey;
                 loadedChunks.add(cKey);
                 short colH = column.getHeightmap().getHighestY();
                 regionHeightmaps.computeIfAbsent(rKey, k -> new com.pixel.qve.world.RegionHeightmap2D())
                         .updateMax(localCx, localCz, colH);
             }
             return parsed;
+        }
+    }
+
+    private void putColumn(long cKey, VoxelChunkColumn column) {
+        columnCache.put(cKey, column);
+        columnEvictionQueue.offer(cKey);
+        while (columnCache.size() > maxCachedColumns) {
+            Long oldest = columnEvictionQueue.poll();
+            if (oldest != null) {
+                columnCache.remove(oldest);
+                loadedChunks.remove(oldest);
+            } else {
+                break;
+            }
         }
     }
 
@@ -486,15 +537,19 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
      */
     public void clearCache() {
         columnCache.clear();
+        columnEvictionQueue.clear();
         Arrays.fill(l1Keys, Long.MIN_VALUE);
         Arrays.fill(l1Columns, null);
         loadedChunks.clear();
         missingRegions.clear();
+        existingRegions.clear();
         regionHeightmaps.clear();
+        highestWorldY = Short.MIN_VALUE;
     }
 
     /**
      * Resolves an open McaRegionReader for the given region coordinates, opening it on demand if necessary.
+     * Enforces a bounded active region pool via LRU eviction to prevent file handle exhaustion.
      *
      * @param rx Region X coordinate
      * @param rz Region Z coordinate
@@ -507,12 +562,42 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             return reader;
         }
 
+        if (missingRegions.contains(rKey)) {
+            return null;
+        }
+
         if (regionDirectory != null) {
             Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-            if (java.nio.file.Files.exists(mcaFile)) {
+            if (existingRegions.contains(rKey) || java.nio.file.Files.exists(mcaFile)) {
+                existingRegions.add(rKey);
                 try {
                     McaRegionReader newReader = new McaRegionReader(mcaFile, registry, shapeRegistry);
-                    regions.put(rKey, newReader);
+                    McaRegionReader existing = regions.putIfAbsent(rKey, newReader);
+                    if (existing != null) {
+                        try {
+                            newReader.close();
+                        } catch (IOException e) {
+                            LOGGER.log(System.Logger.Level.DEBUG, "Failed to close duplicate MCA reader: {0}", e.getMessage());
+                        }
+                        return existing;
+                    }
+                    regionEvictionQueue.offer(rKey);
+                    while (regions.size() > maxOpenRegions) {
+                        Long oldest = regionEvictionQueue.poll();
+                        if (oldest != null && !oldest.equals(rKey)) {
+                            McaRegionReader evicted = regions.remove(oldest);
+                            if (evicted != null) {
+                                try {
+                                    evicted.close();
+                                } catch (IOException e) {
+                                    LOGGER.log(System.Logger.Level.WARNING, "Error closing evicted region reader {0}: {1}", oldest, e.getMessage());
+                                }
+                            }
+                        } else if (oldest != null) {
+                            regionEvictionQueue.offer(oldest);
+                            break;
+                        }
+                    }
                     return newReader;
                 } catch (IOException e) {
                     LOGGER.log(System.Logger.Level.WARNING,
@@ -541,6 +626,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             }
         }
         regions.clear();
+        regionEvictionQueue.clear();
         clearCache();
     }
 }

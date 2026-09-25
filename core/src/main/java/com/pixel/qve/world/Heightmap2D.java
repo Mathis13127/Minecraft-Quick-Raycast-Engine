@@ -18,7 +18,7 @@ public final class Heightmap2D {
     public static final short VOID_Y = -999;
 
     private final short[] heights;
-    private short highestY;
+    private volatile short highestY;
 
     /**
      * Constructs an empty 2D heightmap initialized to VOID_Y.
@@ -84,8 +84,9 @@ public final class Heightmap2D {
     public void recomputeHighest() {
         short max = VOID_Y;
         for (int i = 0; i < ENTRIES; i++) {
-            if (heights[i] > max) {
-                max = heights[i];
+            short val = heights[i];
+            if (val > max) {
+                max = val;
             }
         }
         this.highestY = max;

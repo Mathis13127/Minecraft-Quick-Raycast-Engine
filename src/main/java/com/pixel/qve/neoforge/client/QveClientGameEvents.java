@@ -31,4 +31,14 @@ public final class QveClientGameEvents {
             }
         }
     }
+
+    /**
+     * Resets client-side voxel grids and resources on logout/disconnect.
+     *
+     * @param event Client player logging out event
+     */
+    @SubscribeEvent
+    public static void onClientLoggingOut(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
+        com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.reset();
+    }
 }

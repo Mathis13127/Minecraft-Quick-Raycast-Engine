@@ -489,18 +489,34 @@ public final class MinecraftVoxelBridge {
     }
 
     /**
-     * Clears cached resources when a level unloads.
+     * Clears and closes cached resources when a level unloads.
      *
      * @param level Unloaded Level instance
      */
     public static void onLevelUnloaded(Level level) {
-        WORLD_GRIDS.remove(level.dimension());
+        if (level != null) {
+            MinecraftVoxelGrid grid = WORLD_GRIDS.remove(level.dimension());
+            if (grid != null) {
+                try {
+                    grid.close();
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to cleanly close MinecraftVoxelGrid for level {}", level.dimension().location(), e);
+                }
+            }
+        }
     }
 
     /**
-     * Resets all internal caches. Used during testing and server reloads.
+     * Resets all internal caches and cleanly closes all active level grids.
      */
     public static void reset() {
+        for (var entry : WORLD_GRIDS.entrySet()) {
+            try {
+                entry.getValue().close();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to cleanly close MinecraftVoxelGrid for level {}", entry.getKey().location(), e);
+            }
+        }
         WORLD_GRIDS.clear();
         STATE_TO_ID.clear();
     }

@@ -23,6 +23,21 @@ public final class VoxelSection {
     /** Immutable empty section singleton representing pure air. */
     public static final VoxelSection EMPTY = new VoxelSection();
 
+    private static final java.lang.invoke.VarHandle BITMASK_HANDLE =
+            java.lang.invoke.MethodHandles.arrayElementVarHandle(long[].class);
+    private static final java.lang.invoke.VarHandle BLOCK_IDS_HANDLE =
+            java.lang.invoke.MethodHandles.arrayElementVarHandle(int[].class);
+    private static final java.lang.invoke.VarHandle SOLID_COUNT_HANDLE;
+
+    static {
+        try {
+            SOLID_COUNT_HANDLE = java.lang.invoke.MethodHandles.lookup()
+                    .findVarHandle(VoxelSection.class, "solidCount", int.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private final long[] bitmask;
     private int[] blockIds;
     private int solidCount;
@@ -152,7 +167,7 @@ public final class VoxelSection {
     }
 
     /**
-     * Modifies the occupancy and block ID of a local voxel.
+     * Modifies the occupancy and block ID of a local voxel using lock-free atomic hardware primitives.
      *
      * @param x       Local X coordinate [0..15]
      * @param y       Local Y coordinate [0..15]
@@ -167,20 +182,20 @@ public final class VoxelSection {
         int idx = voxelIndex(x, y, z);
         int word = idx >>> 6;
         long bit = 1L << (idx & 63);
-        boolean wasSolid = (bitmask[word] & bit) != 0L;
 
         if (solid) {
-            bitmask[word] |= bit;
-            if (!wasSolid) {
-                solidCount++;
+            BLOCK_IDS_HANDLE.setRelease(blockIds, idx, blockId);
+            long oldWord = (long) BITMASK_HANDLE.getAndBitwiseOrRelease(bitmask, word, bit);
+            if ((oldWord & bit) == 0L) {
+                SOLID_COUNT_HANDLE.getAndAddRelease(this, 1);
             }
         } else {
-            bitmask[word] &= ~bit;
-            if (wasSolid) {
-                solidCount--;
+            long oldWord = (long) BITMASK_HANDLE.getAndBitwiseAndRelease(bitmask, word, ~bit);
+            if ((oldWord & bit) != 0L) {
+                SOLID_COUNT_HANDLE.getAndAddRelease(this, -1);
             }
+            BLOCK_IDS_HANDLE.setRelease(blockIds, idx, 0);
         }
-        blockIds[idx] = blockId;
     }
 
     /**
