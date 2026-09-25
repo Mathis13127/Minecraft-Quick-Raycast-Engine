@@ -109,14 +109,24 @@ public final class McaWriteCoordinator implements Closeable {
     }
 
     /**
+     * Optional voxel verification target to check during pre-commit verification.
+     */
+    public record VoxelCheck(int localX, int worldY, int localZ, int expectedBlockId) {}
+
+    /**
      * Payload descriptor representing a chunk ready for serializing and writing to disk.
      */
     public record ChunkWriteTask(
             int chunkX,
             int chunkZ,
             Map<Integer, VoxelSection> sections,
-            Map<Long, byte[]> blockEntities
-    ) {}
+            Map<Long, byte[]> blockEntities,
+            VoxelCheck voxelCheck
+    ) {
+        public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, Map<Long, byte[]> blockEntities) {
+            this(chunkX, chunkZ, sections, blockEntities, null);
+        }
+    }
 
     /**
      * Submits an asynchronous batch of chunk writes for a single region.
@@ -212,8 +222,9 @@ public final class McaWriteCoordinator implements Closeable {
                     }
                 }
 
-                // 4. Pre-commit verification: verify coordinates of every written chunk
-                for (ChunkWriteTask task : chunks) {
+                // 4. Pre-commit verification: verify coordinates and optional voxel of every written chunk
+                for (int i = 0; i < chunks.size(); i++) {
+                    ChunkWriteTask task = chunks.get(i);
                     int localX = task.chunkX() & 31;
                     int localZ = task.chunkZ() & 31;
                     java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
@@ -223,6 +234,14 @@ public final class McaWriteCoordinator implements Closeable {
                     if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, task.chunkX(), task.chunkZ())) {
                         throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
                     }
+                    if (task.voxelCheck() != null) {
+                        VoxelCheck vc = task.voxelCheck();
+                        if (!FastChunkVerifier.verifyChunkVoxel(verifyPayload, task.chunkX(), task.chunkZ(),
+                                vc.localX(), vc.worldY(), vc.localZ(), vc.expectedBlockId(), registry)) {
+                            throw new IOException("Pre-commit verification failed: voxel mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
+                        }
+                    }
+                    metricsList.set(i, metricsList.get(i).withVerified(true));
                 }
 
                 // 5. Commit: sync 8KB header and flush
@@ -334,6 +353,7 @@ public final class McaWriteCoordinator implements Closeable {
                 if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, chunkX, chunkZ)) {
                     throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + chunkX + ", " + chunkZ + ")");
                 }
+                metrics = metrics.withVerified(true);
 
                 // 4. Commit header
                 writer.syncHeaderOnly();

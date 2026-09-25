@@ -223,4 +223,70 @@ public class McaRoundTripTest {
             });
         }
     }
+
+    @Test
+    @DisplayName("Selective section reading with sectionFilter only decodes requested section")
+    void testSelectiveSectionReadingWithFilter(@TempDir Path tempDir) throws IOException {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int stoneId = registry.getOrRegister("minecraft:stone");
+        int emeraldId = registry.getOrRegister("minecraft:emerald_block");
+
+        VoxelSection sec0 = new VoxelSection();
+        sec0.setVoxel(0, 0, 0, true, stoneId);
+        VoxelSection sec4 = new VoxelSection();
+        sec4.setVoxel(5, 5, 5, true, emeraldId);
+
+        Map<Integer, VoxelSection> sections = new HashMap<>();
+        sections.put(0, sec0);
+        sections.put(4, sec4);
+
+        try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            var metrics = coordinator.writeChunkSync(0, 0, sections, null);
+            assertNotNull(metrics);
+        }
+
+        Path mcaFile = tempDir.resolve("r.0.0.mca");
+        try (McaRegionReader reader = new McaRegionReader(mcaFile, registry)) {
+            java.util.List<Integer> parsedSections = new java.util.ArrayList<>();
+            int parsed = reader.readChunk(0, 0, y -> y == 4, (secY, sec) -> {
+                parsedSections.add(secY);
+                assertEquals(emeraldId, sec.getBlockId(5, 5, 5));
+            });
+
+            assertEquals(1, parsed, "Only 1 section should be reported as parsed");
+            assertEquals(1, parsedSections.size());
+            assertEquals(4, parsedSections.get(0).intValue(), "Section 4 must be the only parsed section");
+        }
+    }
+
+    @Test
+    @DisplayName("Single-pass verification validates coordinates and target voxel in batch write")
+    void testBatchWriteWithSinglePassVoxelCheck(@TempDir Path tempDir) throws IOException {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int emeraldId = registry.getOrRegister("minecraft:emerald_block");
+
+        VoxelSection sec4 = new VoxelSection();
+        sec4.setVoxel(2, 12, 6, true, emeraldId); // localX=2, worldY=76 (4*16+12), localZ=6
+
+        McaWriteCoordinator.VoxelCheck validCheck = new McaWriteCoordinator.VoxelCheck(2, 76, 6, emeraldId);
+        McaWriteCoordinator.ChunkWriteTask task = new McaWriteCoordinator.ChunkWriteTask(
+                5, 5, Map.of(4, sec4), null, validCheck
+        );
+
+        try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            var metricsList = coordinator.writeRegionBatchSync(0, 0, java.util.List.of(task));
+            assertEquals(1, metricsList.size());
+            assertTrue(metricsList.get(0).isVerified(), "WriteMetrics must report isVerified=true on match");
+        }
+
+        // Now test mismatch throwing pre-commit verification exception
+        McaWriteCoordinator.VoxelCheck invalidCheck = new McaWriteCoordinator.VoxelCheck(2, 76, 6, 9999);
+        McaWriteCoordinator.ChunkWriteTask invalidTask = new McaWriteCoordinator.ChunkWriteTask(
+                6, 6, Map.of(4, sec4), null, invalidCheck
+        );
+
+        try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            assertThrows(IOException.class, () -> coordinator.writeRegionBatchSync(0, 0, java.util.List.of(invalidTask)));
+        }
+    }
 }

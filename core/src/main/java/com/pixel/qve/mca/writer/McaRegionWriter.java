@@ -40,7 +40,15 @@ public final class McaRegionWriter implements Closeable {
     /**
      * Metrics recorded after a chunk write operation.
      */
-    public record WriteMetrics(int sectorOffset, int sectorCount, int compressedBytes, boolean isRelocated) {}
+    public record WriteMetrics(int sectorOffset, int sectorCount, int compressedBytes, boolean isRelocated, boolean isVerified) {
+        public WriteMetrics(int sectorOffset, int sectorCount, int compressedBytes, boolean isRelocated) {
+            this(sectorOffset, sectorCount, compressedBytes, isRelocated, false);
+        }
+
+        public WriteMetrics withVerified(boolean verified) {
+            return new WriteMetrics(sectorOffset, sectorCount, compressedBytes, isRelocated, verified);
+        }
+    }
 
     /**
      * Opens or creates an Anvil MCA region file for writing.

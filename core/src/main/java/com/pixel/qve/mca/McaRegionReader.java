@@ -227,6 +227,21 @@ public final class McaRegionReader implements Closeable {
      * @throws IOException If decompression or I/O error occurs
      */
     public int readChunk(int localChunkX, int localChunkZ, ChunkSectionConsumer consumer) throws IOException {
+        return readChunk(localChunkX, localChunkZ, null, consumer);
+    }
+
+    /**
+     * Reads sections of the specified local chunk into the consumer callback with optional section Y filtering.
+     * Uses zero-copy mapped buffer slicing and single-pass SIMD Zlib inflation.
+     *
+     * @param localChunkX   Chunk X relative to region (0..31)
+     * @param localChunkZ   Chunk Z relative to region (0..31)
+     * @param sectionFilter Predicate testing section Y; if non-null, sections returning false are skipped without decoding
+     * @param consumer      Callback receiving each populated section
+     * @return Number of sections parsed
+     * @throws IOException If decompression or I/O error occurs
+     */
+    public int readChunk(int localChunkX, int localChunkZ, java.util.function.IntPredicate sectionFilter, ChunkSectionConsumer consumer) throws IOException {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
             throw new IndexOutOfBoundsException("Local chunk coords must be in 0..31: (" + localChunkX + ", " + localChunkZ + ")");
         }
@@ -269,7 +284,7 @@ public final class McaRegionReader implements Closeable {
                 }
                 int count = decompressedBuf.getInt();
                 for (int s = 0; s < count; s++) {
-                    parsedSections += parseSection(decompressedBuf, consumer);
+                    parsedSections += parseSection(decompressedBuf, sectionFilter, consumer);
                 }
             } else {
                 FastNbtReader.skipTagPayload(decompressedBuf, tagType);
@@ -279,7 +294,7 @@ public final class McaRegionReader implements Closeable {
         return parsedSections;
     }
 
-    private int parseSection(ByteBuffer buf, ChunkSectionConsumer consumer) {
+    private int parseSection(ByteBuffer buf, java.util.function.IntPredicate sectionFilter, ChunkSectionConsumer consumer) {
         int sectionY = Integer.MIN_VALUE;
         int[] paletteIds = null;
         long[] data = null;
@@ -294,6 +309,16 @@ public final class McaRegionReader implements Closeable {
 
             if (FastNbtReader.matches(buf, namePos, nameLen, Y_NAME) && childType == FastNbtReader.TAG_BYTE) {
                 sectionY = buf.get();
+                if (sectionFilter != null && !sectionFilter.test(sectionY)) {
+                    while (true) {
+                        byte skipType = buf.get();
+                        if (skipType == FastNbtReader.TAG_END) break;
+                        int sNameLen = buf.getShort() & 0xFFFF;
+                        buf.position(buf.position() + sNameLen);
+                        FastNbtReader.skipTagPayload(buf, skipType);
+                    }
+                    return 0;
+                }
             } else if (FastNbtReader.matches(buf, namePos, nameLen, BLOCK_STATES_NAME) && childType == FastNbtReader.TAG_COMPOUND) {
                 // Parse block_states compound
                 while (true) {
@@ -324,6 +349,10 @@ public final class McaRegionReader implements Closeable {
             } else {
                 FastNbtReader.skipTagPayload(buf, childType);
             }
+        }
+
+        if (sectionFilter != null && !sectionFilter.test(sectionY)) {
+            return 0;
         }
 
         if (sectionY != Integer.MIN_VALUE && paletteIds != null) {
