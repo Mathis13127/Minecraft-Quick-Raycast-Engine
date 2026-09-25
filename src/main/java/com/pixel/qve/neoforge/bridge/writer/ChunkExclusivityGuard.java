@@ -31,6 +31,9 @@ public final class ChunkExclusivityGuard {
 
         if (level instanceof ServerLevel serverLevel) {
             ServerChunkCache scc = serverLevel.getChunkSource();
+            if (scc == null) {
+                return false;
+            }
             if (scc.hasChunk(chunkX, chunkZ)) {
                 return true;
             }

@@ -109,6 +109,82 @@ public final class McaWriteCoordinator implements Closeable {
     }
 
     /**
+     * Payload descriptor representing a chunk ready for serializing and writing to disk.
+     */
+    public record ChunkWriteTask(
+            int chunkX,
+            int chunkZ,
+            Map<Integer, VoxelSection> sections,
+            Map<Long, byte[]> blockEntities
+    ) {}
+
+    /**
+     * Submits an asynchronous batch of chunk writes for a single region.
+     * All chunks are written sequentially under a single region lock, and the 8KB header is synced once at the end.
+     *
+     * @param rx     Region X
+     * @param rz     Region Z
+     * @param chunks List of chunk write tasks belonging to this region
+     * @return CompletableFuture completing with list of WriteMetrics for each chunk
+     */
+    public CompletableFuture<List<McaRegionWriter.WriteMetrics>> writeRegionBatchAsync(int rx, int rz, List<ChunkWriteTask> chunks) {
+        return VoxelDiskWriterThreadPool.submit(() -> writeRegionBatchSync(rx, rz, chunks));
+    }
+
+    /**
+     * Synchronously writes a batch of chunks for a single region, syncing the 8KB header once at completion.
+     *
+     * @param rx     Region X
+     * @param rz     Region Z
+     * @param chunks List of chunk write tasks belonging to this region
+     * @return List of WriteMetrics for each chunk in the order submitted
+     * @throws IOException If write fails
+     */
+    public List<McaRegionWriter.WriteMetrics> writeRegionBatchSync(int rx, int rz, List<ChunkWriteTask> chunks) throws IOException {
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        long rKey = regionKey(rx, rz);
+        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            McaRegionWriter writer = getOrOpenWriter(rx, rz);
+            List<McaRegionWriter.WriteMetrics> metricsList = new ArrayList<>(chunks.size());
+
+            for (int i = 0; i < chunks.size(); i++) {
+                ChunkWriteTask task = chunks.get(i);
+                long startTime = System.nanoTime();
+                int localX = task.chunkX() & 31;
+                int localZ = task.chunkZ() & 31;
+
+                // 1. Serialize Chunk NBT
+                FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
+                FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
+                byte[] uncompressed = nbtWriter.toByteArray();
+
+                // 2. Write payload, syncing header only on the last chunk
+                boolean isLast = (i == chunks.size() - 1);
+                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, isLast);
+                metricsList.add(metrics);
+
+                // 3. Notify listeners
+                long duration = System.nanoTime() - startTime;
+                for (IChunkWriteListener listener : listeners) {
+                    try {
+                        listener.onChunkWritten(task.chunkX(), task.chunkZ(), duration, metrics);
+                    } catch (Throwable t) {
+                        LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
+                    }
+                }
+            }
+
+            return metricsList;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Submits an asynchronous chunk write operation.
      *
      * @param chunkX        World chunk X

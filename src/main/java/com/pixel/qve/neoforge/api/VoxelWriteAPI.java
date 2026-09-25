@@ -366,9 +366,46 @@ public final class VoxelWriteAPI {
     }
 
     /**
-     * Cleans up all writer coordinators and flushes files on server stop or level unload.
+     * Handles graceful shutdown on server stop: drains worker threads within timeout,
+     * serializes incomplete batches to recovery journal if configured, and safely closes file channels.
+     *
+     * @param server MinecraftServer instance
      */
-    public static synchronized void reset() {
+    public static synchronized void onServerStopping(net.minecraft.server.MinecraftServer server) {
+        org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(VoxelWriteAPI.class);
+        logger.info("[QVE] Initiating graceful disk writer drain on server shutdown...");
+
+        int timeout = 3;
+        try {
+            if (com.pixel.qve.neoforge.config.QveConfig.SHUTDOWN_DRAIN_TIMEOUT_SECONDS != null) {
+                timeout = com.pixel.qve.neoforge.config.QveConfig.SHUTDOWN_DRAIN_TIMEOUT_SECONDS.get();
+            }
+        } catch (Throwable ignored) {
+        }
+
+        // 1. Drain active write tasks FIRST before closing any file channels
+        boolean clean = com.pixel.qve.mca.writer.VoxelDiskWriterThreadPool.drainAndShutdown(timeout, java.util.concurrent.TimeUnit.SECONDS);
+        if (!clean) {
+            logger.warn("[QVE] Disk writer thread pool timed out after {} seconds. Forcing shutdown.", timeout);
+        }
+
+        // 2. If recovery queue enabled and pending batches exist, journal them to JSON
+        try {
+            boolean recoveryEnabled = true;
+            if (com.pixel.qve.neoforge.config.QveConfig.RESUME_INCOMPLETE_BATCHES != null) {
+                recoveryEnabled = com.pixel.qve.neoforge.config.QveConfig.RESUME_INCOMPLETE_BATCHES.get();
+            }
+            if (recoveryEnabled && server != null) {
+                java.util.List<ChunkWriteBatch> active = ChunkWriteBatch.getActiveBatches();
+                if (!active.isEmpty()) {
+                    com.pixel.qve.neoforge.recovery.BatchRecoveryJournal.savePendingBatches(server, active);
+                }
+            }
+        } catch (Throwable t) {
+            logger.error("[QVE] Error during shutdown recovery journaling: {}", t.getMessage(), t);
+        }
+
+        // 3. Cleanly close writers and region files
         for (MinecraftVoxelWriter writer : WRITERS.values()) {
             try {
                 writer.close();
@@ -376,6 +413,41 @@ public final class VoxelWriteAPI {
             }
         }
         WRITERS.clear();
-        com.pixel.qve.mca.writer.VoxelDiskWriterThreadPool.shutdown();
+        logger.info("[QVE] All MCA writers, coordinators, and threads cleanly terminated.");
+    }
+
+    /**
+     * Checks if a recovery journal exists from a previous session and automatically resumes pending batches.
+     *
+     * @param server MinecraftServer instance
+     */
+    public static void checkAndResumeRecovery(net.minecraft.server.MinecraftServer server) {
+        if (server == null) return;
+        try {
+            boolean recoveryEnabled = true;
+            if (com.pixel.qve.neoforge.config.QveConfig.RESUME_INCOMPLETE_BATCHES != null) {
+                recoveryEnabled = com.pixel.qve.neoforge.config.QveConfig.RESUME_INCOMPLETE_BATCHES.get();
+            }
+            if (recoveryEnabled) {
+                com.pixel.qve.neoforge.recovery.BatchRecoveryJournal.resumeBatchesIfPresent(server);
+            }
+        } catch (Throwable t) {
+            org.slf4j.LoggerFactory.getLogger(VoxelWriteAPI.class).error("[QVE] Error checking recovery journal on startup: {}", t.getMessage(), t);
+        }
+    }
+
+    /**
+     * Cleans up all writer coordinators and flushes files on server stop or level unload.
+     */
+    public static synchronized void reset() {
+        // Drain pool FIRST before closing file channels
+        com.pixel.qve.mca.writer.VoxelDiskWriterThreadPool.drainAndShutdown(3, java.util.concurrent.TimeUnit.SECONDS);
+        for (MinecraftVoxelWriter writer : WRITERS.values()) {
+            try {
+                writer.close();
+            } catch (Exception ignored) {
+            }
+        }
+        WRITERS.clear();
     }
 }

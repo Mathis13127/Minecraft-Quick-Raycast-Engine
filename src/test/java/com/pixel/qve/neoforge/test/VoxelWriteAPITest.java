@@ -1,29 +1,42 @@
 package com.pixel.qve.neoforge.test;
 
+import com.pixel.qve.mca.writer.VoxelDiskWriterThreadPool;
 import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.mca.writer.WriteOptions.CreationPolicy;
 import com.pixel.qve.mca.writer.WriteOptions.ExecutionPolicy;
 import com.pixel.qve.neoforge.api.BatchWriteResult;
 import com.pixel.qve.neoforge.api.ChunkWriteBatch;
+import com.pixel.qve.neoforge.api.ChunkWriteBatch.SortStrategy;
+import java.util.Comparator;
 import com.pixel.qve.neoforge.api.WriteResult;
 import com.pixel.qve.neoforge.api.WriteStatus;
 import com.pixel.qve.neoforge.api.event.ChunkPostDirectWriteEvent;
 import com.pixel.qve.neoforge.api.event.ChunkPreDirectWriteEvent;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
 import com.pixel.qve.neoforge.bridge.writer.ChunkWriteContext;
+import com.pixel.qve.neoforge.recovery.BatchRecoveryJournal;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.Bootstrap;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.LevelResource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -285,5 +298,103 @@ public class VoxelWriteAPITest {
         Optional<WriteResult> failOpt = batch.validate(WriteOptions.EXISTING_ONLY);
         assertTrue(failOpt.isPresent(), "FAIL_IF_MISSING must reject missing chunk during pre-flight");
         assertEquals(WriteStatus.FAIL_CHUNK_NOT_FOUND, failOpt.get().status());
+    }
+
+    @Test
+    @DisplayName("VoxelDiskWriterThreadPool graceful drain and shutdown")
+    void testDrainAndShutdownGracefulTermination() {
+        java.util.concurrent.atomic.AtomicBoolean taskFinished = new java.util.concurrent.atomic.AtomicBoolean(false);
+        VoxelDiskWriterThreadPool.submit(() -> {
+            Thread.sleep(50);
+            taskFinished.set(true);
+            return null;
+        });
+        assertTrue(VoxelDiskWriterThreadPool.isRunning());
+
+        boolean drained = VoxelDiskWriterThreadPool.drainAndShutdown(3, TimeUnit.SECONDS);
+        assertTrue(drained, "Pool must drain and shut down cleanly");
+        assertTrue(taskFinished.get(), "Submitted task must complete before drain finishes");
+        assertFalse(VoxelDiskWriterThreadPool.isRunning(), "Pool must report not running after shutdown");
+    }
+
+    @Test
+    @DisplayName("ChunkWriteBatch spatial sorting strategies (Player proximity and centroid)")
+    void testSpatialSortingStrategies() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        ServerPlayer mockPlayer = org.mockito.Mockito.mock(ServerPlayer.class);
+        org.mockito.Mockito.when(mockPlayer.chunkPosition()).thenReturn(new ChunkPos(10, 10));
+        org.mockito.Mockito.when(mockLevel.players()).thenReturn(List.of(mockPlayer));
+
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+        BlockState stone = Blocks.STONE.defaultBlockState();
+
+        // Enqueue chunks at (0, 0), (10, 10), and (50, 50)
+        batch.setBlock(new BlockPos(0, 64, 0), stone);
+        batch.setBlock(new BlockPos(50 * 16, 64, 50 * 16), stone);
+        batch.setBlock(new BlockPos(10 * 16, 64, 10 * 16), stone);
+
+        // Player proximity sorting: chunk (10, 10) should be first, then (0, 0), then (50, 50)
+        List<ChunkWriteBatch.ChunkEdits> playerSorted = batch.getSortedChunkEdits(SortStrategy.PLAYER_PROXIMITY);
+        assertEquals(3, playerSorted.size());
+        assertEquals(10, playerSorted.get(0).getChunkX());
+        assertEquals(10, playerSorted.get(0).getChunkZ());
+        assertEquals(0, playerSorted.get(1).getChunkX());
+        assertEquals(0, playerSorted.get(1).getChunkZ());
+        assertEquals(50, playerSorted.get(2).getChunkX());
+        assertEquals(50, playerSorted.get(2).getChunkZ());
+
+        // Centroid sorting: average coordinates (0 + 10 + 50)/3 = 20
+        List<ChunkWriteBatch.ChunkEdits> centroidSorted = batch.getSortedChunkEdits(SortStrategy.CENTROID);
+        assertEquals(3, centroidSorted.size());
+        assertEquals(10, centroidSorted.get(0).getChunkX());
+    }
+
+    @Test
+    @DisplayName("BatchRecoveryJournal serialization, persistence, and cleanup")
+    void testBatchRecoveryJournalSerializationAndCleanup() throws Exception {
+        Path tempDir = Files.createTempDirectory("qve_journal_test");
+        try {
+            MinecraftServer mockServer = org.mockito.Mockito.mock(MinecraftServer.class);
+            org.mockito.Mockito.when(mockServer.getWorldPath(LevelResource.ROOT)).thenReturn(tempDir);
+
+            ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+            org.mockito.Mockito.when(mockLevel.getServer()).thenReturn(mockServer);
+            org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+            org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+            org.mockito.Mockito.when(mockLevel.dimension()).thenReturn(Level.OVERWORLD);
+
+            ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+            BlockState stone = Blocks.STONE.defaultBlockState();
+            batch.setBlock(new BlockPos(100, 64, 200), stone);
+
+            // Execute validation and initialize batch
+            batch.validate(WriteOptions.DEFAULT);
+
+            // Save pending batch to journal
+            int savedChunks = BatchRecoveryJournal.savePendingBatches(mockServer, List.of(batch));
+            assertEquals(1, savedChunks);
+
+            Path journalFile = tempDir.resolve("qve_recovery_queue.json");
+            assertTrue(Files.isRegularFile(journalFile), "Journal file must exist on disk");
+            String content = Files.readString(journalFile);
+            assertTrue(content.contains("minecraft:overworld"));
+            assertTrue(content.contains("minecraft:stone"));
+
+            // Delete journal
+            BatchRecoveryJournal.deleteJournal(mockServer);
+            assertFalse(Files.exists(journalFile), "Journal file must be deleted");
+        } finally {
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        }
     }
 }

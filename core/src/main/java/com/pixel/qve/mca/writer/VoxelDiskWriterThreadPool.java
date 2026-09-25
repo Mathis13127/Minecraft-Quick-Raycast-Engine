@@ -79,20 +79,46 @@ public final class VoxelDiskWriterThreadPool {
     }
 
     /**
-     * Shuts down the thread pool and awaits termination.
+     * Checks if the disk writer thread pool is actively initialized and accepting work.
+     *
+     * @return True if pool is running
      */
-    public static synchronized void shutdown() {
+    public static boolean isRunning() {
+        return EXECUTOR != null && !EXECUTOR.isShutdown() && !EXECUTOR.isTerminated();
+    }
+
+    /**
+     * Gracefully drains all pending and active disk writing tasks, waiting up to the given timeout.
+     * If tasks do not terminate in time, forcibly shuts down remaining worker threads.
+     *
+     * @param timeout Maximum wait time
+     * @param unit    Time unit
+     * @return True if all tasks completed cleanly, false if timeout was reached
+     */
+    public static synchronized boolean drainAndShutdown(long timeout, TimeUnit unit) {
         if (EXECUTOR != null && !EXECUTOR.isShutdown()) {
             EXECUTOR.shutdown();
+            boolean clean = false;
             try {
-                if (!EXECUTOR.awaitTermination(3, TimeUnit.SECONDS)) {
+                clean = EXECUTOR.awaitTermination(timeout, unit);
+                if (!clean) {
                     EXECUTOR.shutdownNow();
                 }
             } catch (InterruptedException e) {
                 EXECUTOR.shutdownNow();
                 Thread.currentThread().interrupt();
+            } finally {
+                EXECUTOR = null;
             }
-            EXECUTOR = null;
+            return clean;
         }
+        return true;
+    }
+
+    /**
+     * Shuts down the thread pool with default 3-second grace period.
+     */
+    public static synchronized void shutdown() {
+        drainAndShutdown(3, TimeUnit.SECONDS);
     }
 }

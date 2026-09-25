@@ -12,6 +12,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 
@@ -19,6 +20,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Universal Heterogeneous Voxel Buffer for high-throughput multi-block, volumetric, and multi-chunk modifications.
@@ -27,9 +29,109 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class ChunkWriteBatch {
 
+    private static final Set<ChunkWriteBatch> ACTIVE_BATCHES = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    /**
+     * Gets all currently active or queued ChunkWriteBatches across the server.
+     */
+    public static List<ChunkWriteBatch> getActiveBatches() {
+        return new ArrayList<>(ACTIVE_BATCHES);
+    }
+
     private final Level level;
     private final Map<Long, ChunkEdits> chunkEditsMap = new LinkedHashMap<>();
+    private final Set<Long> remainingChunkKeys = Collections.synchronizedSet(new HashSet<>());
+    private volatile WriteOptions activeOptions = WriteOptions.DEFAULT;
     private int totalBlockCount = 0;
+
+    /**
+     * Gets the Minecraft Level targeted by this batch.
+     */
+    public Level getLevel() {
+        return level;
+    }
+
+    /**
+     * Gets the WriteOptions currently active for this batch.
+     */
+    public WriteOptions getActiveOptions() {
+        return activeOptions;
+    }
+
+    /**
+     * Returns a snapshot of ChunkEdits that have not yet finished execution.
+     */
+    public List<ChunkEdits> getPendingChunkEdits() {
+        List<ChunkEdits> list = new ArrayList<>();
+        synchronized (remainingChunkKeys) {
+            if (remainingChunkKeys.isEmpty() && !ACTIVE_BATCHES.contains(this) && !chunkEditsMap.isEmpty()) {
+                return new ArrayList<>(chunkEditsMap.values());
+            }
+            for (Long key : remainingChunkKeys) {
+                ChunkEdits edits = chunkEditsMap.get(key);
+                if (edits != null) {
+                    list.add(edits);
+                }
+            }
+        }
+        return list;
+    }
+
+    /**
+     * Spatial chunk execution ordering strategies.
+     */
+    public enum SortStrategy {
+        /** Preserve arbitrary insertion order. */
+        NONE,
+        /** Prioritize chunks closest to active players, with equidistant fallback. */
+        PLAYER_PROXIMITY,
+        /** Prioritize chunks closest to the bounding box centroid. */
+        CENTROID
+    }
+
+    /**
+     * Returns a sorted list of ChunkEdits according to the requested spatial SortStrategy.
+     *
+     * @param strategy Desired SortStrategy
+     * @return Sorted list of ChunkEdits
+     */
+    public List<ChunkEdits> getSortedChunkEdits(SortStrategy strategy) {
+        List<ChunkEdits> list = new ArrayList<>(chunkEditsMap.values());
+        if (strategy == SortStrategy.PLAYER_PROXIMITY && level instanceof ServerLevel sl && !sl.players().isEmpty()) {
+            List<ServerPlayer> players = sl.players();
+            list.sort(Comparator.comparingDouble(edits -> {
+                double minD2 = Double.MAX_VALUE;
+                for (ServerPlayer p : players) {
+                    double pcx = p.chunkPosition().x;
+                    double pcz = p.chunkPosition().z;
+                    double dx = edits.getChunkX() - pcx;
+                    double dz = edits.getChunkZ() - pcz;
+                    double d2 = dx * dx + dz * dz;
+                    if (d2 < minD2) {
+                        minD2 = d2;
+                    }
+                }
+                return minD2;
+            }));
+        } else if (strategy == SortStrategy.CENTROID && !list.isEmpty()) {
+            double avgCx = 0;
+            double avgCz = 0;
+            for (ChunkEdits e : list) {
+                avgCx += e.getChunkX();
+                avgCz += e.getChunkZ();
+            }
+            avgCx /= list.size();
+            avgCz /= list.size();
+            final double cx0 = avgCx;
+            final double cz0 = avgCz;
+            list.sort(Comparator.comparingDouble(edits -> {
+                double dx = edits.getChunkX() - cx0;
+                double dz = edits.getChunkZ() - cz0;
+                return dx * dx + dz * dz;
+            }));
+        }
+        return list;
+    }
 
     /**
      * Record representing a single block mutation, with optional NBT and conditional replacement filter.
@@ -102,6 +204,7 @@ public final class ChunkWriteBatch {
 
     private ChunkEdits getOrCreateChunkEdits(int chunkX, int chunkZ) {
         long key = (((long) chunkX) << 32) | (chunkZ & 0xFFFFFFFFL);
+        remainingChunkKeys.add(key);
         return chunkEditsMap.computeIfAbsent(key, k -> new ChunkEdits(chunkX, chunkZ));
     }
 
@@ -152,9 +255,38 @@ public final class ChunkWriteBatch {
      * @return this builder
      */
     public ChunkWriteBatch setBlock(int x, int y, int z, BlockState state, CompoundTag blockEntityNbt) {
+        return setBlock(x, y, z, state, blockEntityNbt, null);
+    }
+
+    /**
+     * Enqueues a single block placement with BlockEntity NBT and optional replacement filter.
+     *
+     * @param pos            Absolute BlockPos
+     * @param state          BlockState to set
+     * @param blockEntityNbt Optional BlockEntity CompoundTag
+     * @param filterState    Optional filter BlockState, or null for unconditional
+     * @return this builder
+     */
+    public ChunkWriteBatch setBlock(BlockPos pos, BlockState state, CompoundTag blockEntityNbt, BlockState filterState) {
+        return setBlock(pos.getX(), pos.getY(), pos.getZ(), state, blockEntityNbt, filterState);
+    }
+
+    /**
+     * Enqueues a single block placement with BlockEntity NBT and optional replacement filter at raw coordinates.
+     *
+     * @param x              World X coordinate
+     * @param y              World Y coordinate
+     * @param z              World Z coordinate
+     * @param state          BlockState to set
+     * @param blockEntityNbt Optional BlockEntity CompoundTag
+     * @param filterState    Optional filter BlockState, or null for unconditional
+     * @return this builder
+     */
+    public ChunkWriteBatch setBlock(int x, int y, int z, BlockState state, CompoundTag blockEntityNbt, BlockState filterState) {
         int cx = x >> 4;
         int cz = z >> 4;
         int blockId = MinecraftVoxelBridge.getBlockId(state);
+        int filterBlockId = (filterState != null) ? MinecraftVoxelBridge.getBlockId(filterState) : -1;
 
         byte[] rawNbt = null;
         if (blockEntityNbt != null) {
@@ -167,7 +299,7 @@ public final class ChunkWriteBatch {
         }
 
         ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
-        edits.addMutation(new BlockMutation(x, y, z, blockId, state, rawNbt, blockEntityNbt, -1, null));
+        edits.addMutation(new BlockMutation(x, y, z, blockId, state, rawNbt, blockEntityNbt, filterBlockId, filterState));
         totalBlockCount++;
         return this;
     }
@@ -370,11 +502,22 @@ public final class ChunkWriteBatch {
         }
 
         WriteOptions opts = (options != null) ? options : WriteOptions.DEFAULT;
+        this.activeOptions = opts;
+        ACTIVE_BATCHES.add(this);
+        synchronized (remainingChunkKeys) {
+            remainingChunkKeys.clear();
+            remainingChunkKeys.addAll(chunkEditsMap.keySet());
+        }
+
         int totalBlocks = totalBlockCount;
 
         // 1. Strict Pre-Flight Fail-Fast Validation (Zero blocks written if invalid)
         Optional<WriteResult> failFast = validate(opts);
         if (failFast.isPresent()) {
+            ACTIVE_BATCHES.remove(this);
+            synchronized (remainingChunkKeys) {
+                remainingChunkKeys.clear();
+            }
             long duration = System.nanoTime() - startTime;
             return CompletableFuture.completedFuture(new BatchWriteResult(
                     chunkEditsMap.size(), 0, chunkEditsMap.size(),
@@ -382,11 +525,14 @@ public final class ChunkWriteBatch {
             ));
         }
 
-        // 2. Partition chunks into RAM and Disk pools
+        // 2. Spatial Ordering: Prioritize active players, then centroid
+        List<ChunkEdits> sortedChunks = getSortedChunkEdits(SortStrategy.PLAYER_PROXIMITY);
+
+        // 3. Partition chunks into RAM and Disk pools
         List<ChunkEdits> ramChunks = new ArrayList<>();
         List<ChunkEdits> diskChunks = new ArrayList<>();
 
-        for (ChunkEdits edits : chunkEditsMap.values()) {
+        for (ChunkEdits edits : sortedChunks) {
             boolean isRam = !opts.isStrict() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ);
             if (isRam) {
                 ramChunks.add(edits);
@@ -397,7 +543,7 @@ public final class ChunkWriteBatch {
 
         List<CompletableFuture<WriteResult>> futures = new ArrayList<>(chunkEditsMap.size());
 
-        // 3. Dispatch RAM chunks on server thread
+        // 4. Dispatch RAM chunks on server thread
         if (!ramChunks.isEmpty()) {
             CompletableFuture<List<WriteResult>> ramFuture = new CompletableFuture<>();
             Runnable ramTask = () -> {
@@ -450,35 +596,86 @@ public final class ChunkWriteBatch {
 
             for (int i = 0; i < ramChunks.size(); i++) {
                 final int idx = i;
-                futures.add(ramFuture.thenApply(list -> list.get(idx)));
+                final ChunkEdits ce = ramChunks.get(i);
+                futures.add(ramFuture.thenApply(list -> {
+                    WriteResult res = list.get(idx);
+                    long key = (((long) ce.chunkX) << 32) | (ce.chunkZ & 0xFFFFFFFFL);
+                    remainingChunkKeys.remove(key);
+                    return res;
+                }));
             }
         }
 
-        // 4. Dispatch Disk chunks via direct MCA coordinator (with adaptive routing if unified)
-        for (ChunkEdits edits : diskChunks) {
-            if (opts.isUnified() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ)) {
-                futures.add(applyChunkToRamAsync(edits));
-            } else {
-                futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.chunkX, edits.chunkZ, ctx -> {
-                    for (Map.Entry<Integer, VoxelSection> secEntry : edits.wholeSections.entrySet()) {
-                        ctx.setSection(secEntry.getKey(), secEntry.getValue());
-                    }
-                    for (BlockMutation m : edits.mutations) {
-                        int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
-                        if (m.matchesFilter(curId, null)) {
-                            ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
-                            if (m.rawNbt() != null) {
-                                ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+        // 5. Dispatch Disk chunks via Region-Batching if enabled, with late-binding RAM check
+        MinecraftVoxelWriter writer = VoxelWriteAPI.getWriter(level);
+        boolean useRegionBatching = com.pixel.qve.neoforge.config.QveConfig.REGION_BATCHING_ENABLED.get();
+
+        if (writer != null && useRegionBatching && !diskChunks.isEmpty()) {
+            Map<Long, List<ChunkEdits>> byRegion = new LinkedHashMap<>();
+            for (ChunkEdits edits : diskChunks) {
+                int rx = edits.chunkX >> 5;
+                int rz = edits.chunkZ >> 5;
+                long rKey = (((long) rx) << 32) | (rz & 0xFFFFFFFFL);
+                byRegion.computeIfAbsent(rKey, k -> new ArrayList<>()).add(edits);
+            }
+
+            for (Map.Entry<Long, List<ChunkEdits>> entry : byRegion.entrySet()) {
+                long rKey = entry.getKey();
+                int rx = (int) (rKey >> 32);
+                int rz = (int) rKey;
+                List<ChunkEdits> regionChunks = entry.getValue();
+
+                CompletableFuture<List<WriteResult>> regFuture = writer.writeRegionBatchAsync(rx, rz, regionChunks, opts);
+                for (int i = 0; i < regionChunks.size(); i++) {
+                    final int idx = i;
+                    final ChunkEdits ce = regionChunks.get(i);
+                    futures.add(regFuture.thenApply(list -> {
+                        WriteResult res = (idx < list.size()) ? list.get(idx)
+                                : WriteResult.failure(WriteStatus.FAIL_IO_ERROR, ce.chunkX, ce.chunkZ, "Missing region batch result");
+                        long key = (((long) ce.chunkX) << 32) | (ce.chunkZ & 0xFFFFFFFFL);
+                        remainingChunkKeys.remove(key);
+                        return res;
+                    }));
+                }
+            }
+        } else {
+            // Fallback single chunk dispatch with late RAM check
+            for (ChunkEdits edits : diskChunks) {
+                long key = (((long) edits.chunkX) << 32) | (edits.chunkZ & 0xFFFFFFFFL);
+                if (opts.isUnified() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ)) {
+                    futures.add(applyChunkToRamAsync(edits).thenApply(res -> {
+                        remainingChunkKeys.remove(key);
+                        return res;
+                    }));
+                } else {
+                    futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.chunkX, edits.chunkZ, ctx -> {
+                        for (Map.Entry<Integer, VoxelSection> secEntry : edits.wholeSections.entrySet()) {
+                            ctx.setSection(secEntry.getKey(), secEntry.getValue());
+                        }
+                        for (BlockMutation m : edits.mutations) {
+                            int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
+                            if (m.matchesFilter(curId, null)) {
+                                ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
+                                if (m.rawNbt() != null) {
+                                    ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+                                }
                             }
                         }
-                    }
-                }, opts));
+                    }, opts).thenApply(res -> {
+                        remainingChunkKeys.remove(key);
+                        return res;
+                    }));
+                }
             }
         }
 
-        // 5. Aggregate all results into BatchWriteResult
+        // 6. Aggregate all results into BatchWriteResult and deregister active batch
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .thenApply(v -> {
+                    ACTIVE_BATCHES.remove(this);
+                    synchronized (remainingChunkKeys) {
+                        remainingChunkKeys.clear();
+                    }
                     List<WriteResult> results = new ArrayList<>(futures.size());
                     int succeeded = 0;
                     int failed = 0;

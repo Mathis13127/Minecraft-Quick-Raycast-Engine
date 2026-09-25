@@ -39,6 +39,12 @@ public class QuickVoxelEngineMod {
         // Register network payloads
         modEventBus.addListener(com.pixel.qve.neoforge.network.QveNetwork::register);
 
+        // Register server configuration
+        net.neoforged.fml.ModLoadingContext.get().getActiveContainer().registerConfig(
+                net.neoforged.fml.config.ModConfig.Type.SERVER,
+                com.pixel.qve.neoforge.config.QveConfig.SPEC
+        );
+
         // Register client HUD and key mappings if on physical client
         if (net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
             com.pixel.qve.neoforge.client.QveClientSetup.init(modEventBus);
@@ -60,6 +66,16 @@ public class QuickVoxelEngineMod {
     @SubscribeEvent
     public void onServerStarting(net.neoforged.neoforge.event.server.ServerStartingEvent event) {
         com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.startAsyncWarmup();
+    }
+
+    /**
+     * Checks and resumes any uncompleted voxel write batches preserved from the previous session.
+     *
+     * @param event Server started event
+     */
+    @SubscribeEvent
+    public void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
+        com.pixel.qve.neoforge.api.VoxelWriteAPI.checkAndResumeRecovery(event.getServer());
     }
 
     /**
@@ -93,8 +109,8 @@ public class QuickVoxelEngineMod {
      */
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        com.pixel.qve.neoforge.api.VoxelWriteAPI.onServerStopping(event.getServer());
         MinecraftVoxelBridge.reset();
-        com.pixel.qve.neoforge.api.VoxelWriteAPI.reset();
         LOGGER.info("[RaycastEngine] Cleared all voxel grids, writers, and cache references on server stop.");
     }
 }

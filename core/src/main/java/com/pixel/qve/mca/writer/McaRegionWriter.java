@@ -136,6 +136,20 @@ public final class McaRegionWriter implements Closeable {
      * @throws IOException If write or compression fails
      */
     public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, byte[] uncompressed) throws IOException {
+        return writeChunk(localChunkX, localChunkZ, uncompressed, true);
+    }
+
+    /**
+     * Writes an uncompressed chunk into this region file, optionally deferring header sync.
+     *
+     * @param localChunkX  Local chunk X within region [0..31]
+     * @param localChunkZ  Local chunk Z within region [0..31]
+     * @param uncompressed Uncompressed raw NBT byte buffer of the chunk
+     * @param syncHeader   True to immediately flush the 8KB header to disk; false to defer for batching
+     * @return WriteMetrics detailing sector allocation and compression
+     * @throws IOException If write or compression fails
+     */
+    public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, byte[] uncompressed, boolean syncHeader) throws IOException {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
             throw new IndexOutOfBoundsException("Local chunk coords must be in 0..31: (" + localChunkX + ", " + localChunkZ + ")");
         }
@@ -177,7 +191,7 @@ public final class McaRegionWriter implements Closeable {
 
         // 2. External chunk file (.mcc) handling if chunk >= 256 sectors (> 1MB)
         if (neededSectors >= 256) {
-            return writeExternalChunk(localChunkX, localChunkZ, localIndex, deflatedBuffer, compressedLen);
+            return writeExternalChunk(localChunkX, localChunkZ, localIndex, deflatedBuffer, compressedLen, syncHeader);
         }
 
         // 3. Allocate sectors in .mca file
@@ -197,14 +211,16 @@ public final class McaRegionWriter implements Closeable {
         // 5. Write to FileChannel
         channel.write(writeBuffer, filePos);
 
-        // 6. Update 8KB header on disk
-        syncHeader();
+        // 6. Update 8KB header on disk if requested
+        if (syncHeader) {
+            syncHeader();
+        }
 
         return new WriteMetrics(alloc.sectorOffset(), alloc.sectorCount(), compressedLen, alloc.isRelocated());
     }
 
     private WriteMetrics writeExternalChunk(int localChunkX, int localChunkZ, int localIndex,
-                                           ByteBuffer deflatedBuffer, int compressedLen) throws IOException {
+                                           ByteBuffer deflatedBuffer, int compressedLen, boolean syncHeader) throws IOException {
         int worldChunkX = (regionX << 5) | localChunkX;
         int worldChunkZ = (regionZ << 5) | localChunkZ;
         Path parent = filePath.getParent();
@@ -228,8 +244,19 @@ public final class McaRegionWriter implements Closeable {
         markerBuf.position(0);
         channel.write(markerBuf, filePos);
 
-        syncHeader();
+        if (syncHeader) {
+            syncHeader();
+        }
         return new WriteMetrics(alloc.sectorOffset(), 1, compressedLen, true);
+    }
+
+    /**
+     * Flushes the current in-memory 8KB allocation header to persistent storage.
+     *
+     * @throws IOException If disk sync fails
+     */
+    public synchronized void syncHeaderOnly() throws IOException {
+        syncHeader();
     }
 
     private void syncHeader() throws IOException {
