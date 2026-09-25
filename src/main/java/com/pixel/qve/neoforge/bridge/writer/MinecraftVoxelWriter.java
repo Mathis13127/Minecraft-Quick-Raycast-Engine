@@ -409,6 +409,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         List<McaWriteCoordinator.ChunkWriteTask> tasks = new ArrayList<>(editsList.size());
         List<ChunkWriteContext> contexts = new ArrayList<>(editsList.size());
+        List<ChunkWriteBatch.ChunkEdits> diskEdits = new ArrayList<>(editsList.size());
         List<CompletableFuture<WriteResult>> ramFutures = new ArrayList<>();
 
         long startTime = System.nanoTime();
@@ -472,6 +473,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
             contexts.add(context);
             tasks.add(new McaWriteCoordinator.ChunkWriteTask(cx, cz, context.getSections(), context.getBlockEntities()));
+            diskEdits.add(edits);
         }
 
         if (tasks.isEmpty()) {
@@ -487,14 +489,42 @@ public final class MinecraftVoxelWriter implements Closeable {
                     long duration = System.nanoTime() - startTime;
                     List<WriteResult> results = new ArrayList<>(editsList.size());
 
-                    // Collect disk write results
+                    // Collect disk write results with physical verification
                     for (int t = 0; t < metricsList.size(); t++) {
                         McaRegionWriter.WriteMetrics m = metricsList.get(t);
                         ChunkWriteContext ctx = contexts.get(t);
+                        ChunkWriteBatch.ChunkEdits edits = diskEdits.get(t);
                         int cx = ctx.getChunkX();
                         int cz = ctx.getChunkZ();
 
-                        WriteResult res = WriteResult.successDisk(cx, cz, duration, m.compressedBytes(), m.sectorOffset(), m.isRelocated());
+                        // Perform physical disk verification on the first mutation
+                        boolean verified = true;
+                        String verifiedName = null;
+                        if (!edits.getMutations().isEmpty()) {
+                            ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
+                            int localX = firstMut.worldX() & 15;
+                            int worldY = firstMut.worldY();
+                            int localZ = firstMut.worldZ() & 15;
+                            int expectedId = firstMut.targetBlockId();
+                            verified = verifyPhysicalDiskWrite(cx, cz, localX, worldY, localZ, expectedId);
+                            verifiedName = (firstMut.targetState() != null)
+                                    ? firstMut.targetState().getBlock().getName().getString()
+                                    : "id:" + expectedId;
+                        }
+
+                        WriteResult res;
+                        if (verified) {
+                            res = WriteResult.successDisk(cx, cz, duration, m.compressedBytes(), m.sectorOffset(), m.isRelocated());
+                            if (verifiedName != null) {
+                                res = res.withVerification(true, verifiedName);
+                            }
+                        } else {
+                            String err = "Physical disk verification mismatch in chunk (" + cx + ", " + cz + "): expected " + verifiedName;
+                            LOGGER.error(err);
+                            res = WriteResult.failure(WriteStatus.FAIL_VERIFICATION_MISMATCH, cx, cz, err)
+                                    .withVerification(false, "mismatch");
+                        }
+
                         if (grid != null) {
                             grid.getCache().invalidateChunk(cx, cz);
                         }

@@ -139,6 +139,8 @@ public final class FastChunkNbtPatcher {
 
         int origCount = buf.getInt();
         int listStart = buf.position();
+        int[] sectionYPerIndex = new int[origCount];
+        Arrays.fill(sectionYPerIndex, Integer.MIN_VALUE);
         Set<Integer> existingYLevels = new HashSet<>();
 
         // Pass 1: Pre-scan existing section Y levels
@@ -158,6 +160,7 @@ public final class FastChunkNbtPatcher {
                     FastNbtReader.skipTagPayload(buf, childType);
                 }
             }
+            sectionYPerIndex[i] = currentY;
             if (currentY != Integer.MIN_VALUE) {
                 existingYLevels.add(currentY);
             }
@@ -179,7 +182,7 @@ public final class FastChunkNbtPatcher {
         buf.position(listStart);
         for (int i = 0; i < origCount; i++) {
             writer.beginListCompound();
-            int secY = Integer.MIN_VALUE;
+            int secY = sectionYPerIndex[i];
             boolean hasBlockStates = false;
             boolean hasBiomes = false;
 
@@ -193,12 +196,12 @@ public final class FastChunkNbtPatcher {
                 buf.position(namePos + nameLen);
 
                 if (childType == FastNbtReader.TAG_BYTE && FastNbtReader.matches(buf, namePos, nameLen, Y_NAME)) {
-                    secY = buf.get();
+                    buf.get(); // Consume Y byte from buffer
                     writer.putByte(Y_NAME, (byte) secY);
                 } else if (FastNbtReader.matches(buf, namePos, nameLen, BLOCK_STATES_NAME)) {
                     hasBlockStates = true;
                     FastNbtReader.skipTagPayload(buf, childType);
-                    VoxelSection modSec = (modifiedSections != null) ? modifiedSections.get(secY) : null;
+                    VoxelSection modSec = (secY != Integer.MIN_VALUE && modifiedSections != null) ? modifiedSections.get(secY) : null;
                     if (modSec != null) {
                         FastChunkNbtWriter.writeSectionBlockStates(writer, modSec, registry);
                     } else {
@@ -220,7 +223,7 @@ public final class FastChunkNbtPatcher {
                 }
             }
 
-            if (!hasBlockStates && modifiedSections != null && modifiedSections.containsKey(secY)) {
+            if (!hasBlockStates && secY != Integer.MIN_VALUE && modifiedSections != null && modifiedSections.containsKey(secY)) {
                 FastChunkNbtWriter.writeSectionBlockStates(writer, modifiedSections.get(secY), registry);
             }
             if (!hasBiomes) {

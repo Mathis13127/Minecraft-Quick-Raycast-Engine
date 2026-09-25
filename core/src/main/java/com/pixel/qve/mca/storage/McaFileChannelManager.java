@@ -100,7 +100,7 @@ public final class McaFileChannelManager implements Closeable {
         if (set != null && !set.isEmpty()) {
             for (McaRegionReader reader : set) {
                 try {
-                    reader.refreshHeaderIfPossible();
+                    reader.refreshHeaderIfPossible(true);
                 } catch (Throwable t) {
                     LOGGER.log(System.Logger.Level.WARNING,
                             "Failed to refresh reader on region ({0}, {1}): {2}", rx, rz, t.getMessage());

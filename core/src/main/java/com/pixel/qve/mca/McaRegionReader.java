@@ -161,12 +161,22 @@ public final class McaRegionReader implements Closeable {
      * written new chunks or appended sectors to this region file while running.
      */
     public synchronized void refreshHeaderIfPossible() {
+        refreshHeaderIfPossible(false);
+    }
+
+    /**
+     * Refreshes the 4KB sector offset table and expands/remaps mmap buffer if Minecraft or QVE has
+     * written new chunks, updated sectors in-place, or appended sectors to this region file.
+     *
+     * @param forceRemap True to force re-mapping even if file size did not change (critical for Windows NTFS)
+     */
+    public synchronized void refreshHeaderIfPossible(boolean forceRemap) {
         try {
             long currentSize = channel.size();
             if (currentSize < 4096) {
                 return;
             }
-            if (mmap == null || currentSize != mmap.capacity()) {
+            if (mmap == null || currentSize != mmap.capacity() || forceRemap) {
                 if (mmap != null) {
                     DirectBufferCleaner.clean(this.mmap);
                 }

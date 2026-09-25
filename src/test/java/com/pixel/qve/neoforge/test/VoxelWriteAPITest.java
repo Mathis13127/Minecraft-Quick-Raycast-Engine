@@ -453,4 +453,22 @@ public class VoxelWriteAPITest {
         assertFalse(res.isVerified());
         assertEquals("minecraft:stone", res.verifiedBlock());
     }
+
+    @Test
+    @DisplayName("BatchWriteResult tracks and aggregates FAIL_VERIFICATION_MISMATCH across multiple chunks")
+    void testBatchWriteVerificationMismatchAggregation() {
+        WriteResult okRes = WriteResult.successDisk(0, 0, 1000L, 512, 2, false).withVerification(true, "minecraft:stone");
+        WriteResult failRes = WriteResult.failure(WriteStatus.FAIL_VERIFICATION_MISMATCH, 1, 1, "Verification mismatch")
+                .withVerification(false, "mismatch");
+
+        BatchWriteResult batchRes = new BatchWriteResult(
+                2, 1, 1, 200, 0, 2, 2000L, List.of(okRes, failRes)
+        );
+
+        assertFalse(batchRes.isAllSuccessful());
+        assertEquals(1, batchRes.totalSucceeded());
+        assertEquals(1, batchRes.totalFailed());
+        assertEquals(WriteStatus.FAIL_VERIFICATION_MISMATCH, batchRes.results().get(1).status());
+        assertFalse(batchRes.results().get(1).isVerified());
+    }
 }

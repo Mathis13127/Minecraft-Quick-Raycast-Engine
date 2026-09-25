@@ -142,8 +142,6 @@ public class FastChunkNbtPatcherTest {
         // Section 1 biome must remain badlands
         @SuppressWarnings("unchecked")
         Map<String, Object> sec1 = (Map<String, Object>) sections.get(1);
-        System.out.println("DEBUG SEC0: " + sec0);
-        System.out.println("DEBUG SEC1: " + sec1);
         assertEquals((byte) 1, sec1.get("Y"));
         @SuppressWarnings("unchecked")
         Map<String, Object> biomes1 = (Map<String, Object>) sec1.get("biomes");
@@ -153,6 +151,89 @@ public class FastChunkNbtPatcherTest {
 
         // Heightmaps must be present
         assertTrue(root.containsKey("Heightmaps"));
+    }
+
+    @Test
+    @DisplayName("Verify FastChunkNbtPatcher patches section correctly even when block_states precedes Y")
+    void testInvertedTagOrderPatching() {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int diamondId = registry.getOrRegister("minecraft:diamond_block");
+
+        FastNbtWriter writer = new FastNbtWriter(4096);
+        writer.beginRootCompound("");
+        writer.putInt("DataVersion", 3955);
+        writer.putInt("xPos", 10);
+        writer.putInt("zPos", 20);
+        writer.putString("Status", "minecraft:full");
+
+        // Single section list with block_states BEFORE Y
+        writer.beginList("sections", FastNbtReader.TAG_COMPOUND, 1);
+        writer.beginListCompound();
+
+        // 1. Write block_states FIRST (all air)
+        writer.beginCompound("block_states")
+                .beginList("palette", FastNbtReader.TAG_COMPOUND, 1)
+                    .beginListCompound()
+                        .putString("Name", "minecraft:air")
+                    .endCompound()
+                .endCompound();
+
+        // 2. Write Y SECOND
+        writer.putByte("Y", (byte) 5);
+
+        // 3. Write biomes THIRD
+        writer.beginCompound("biomes")
+                .beginList("palette", FastNbtReader.TAG_STRING, 1)
+                    .putListString("minecraft:ocean")
+                .endCompound();
+
+        writer.endCompound();
+        writer.endCompound();
+
+        ByteBuffer inputBuf = ByteBuffer.wrap(writer.toByteArray());
+
+        // Prepare modification: diamond block at section Y=5
+        VoxelSection modSec = new VoxelSection();
+        modSec.setVoxel(7, 8, 9, true, diamondId);
+
+        FastNbtWriter outWriter = new FastNbtWriter(4096);
+        FastChunkNbtPatcher.patchChunk(
+                inputBuf,
+                10, 20,
+                -4, 19,
+                registry,
+                Map.of(5, modSec),
+                null,
+                outWriter
+        );
+
+        ByteBuffer patchedBuf = ByteBuffer.wrap(outWriter.toByteArray());
+        Map<String, Object> root = FastNbtReader.parseRootCompound(patchedBuf);
+
+        @SuppressWarnings("unchecked")
+        List<Object> sections = (List<Object>) root.get("sections");
+        assertEquals(1, sections.size());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sec = (Map<String, Object>) sections.get(0);
+        assertEquals((byte) 5, sec.get("Y"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> bs = (Map<String, Object>) sec.get("block_states");
+        assertNotNull(bs);
+
+        @SuppressWarnings("unchecked")
+        List<Object> palette = (List<Object>) bs.get("palette");
+        boolean foundDiamond = false;
+        for (Object o : palette) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> entry = (Map<String, Object>) o;
+            if ("minecraft:diamond_block".equals(entry.get("Name"))) {
+                foundDiamond = true;
+                break;
+            }
+        }
+        assertTrue(foundDiamond, "Patched section must contain diamond block despite inverted NBT tag ordering");
     }
 
     @Test
