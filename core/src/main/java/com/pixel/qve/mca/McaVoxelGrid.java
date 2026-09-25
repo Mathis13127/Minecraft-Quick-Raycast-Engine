@@ -310,7 +310,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     @Override
     public boolean hasChunk(int chunkX, int chunkZ) {
         long cKey = chunkKey(chunkX, chunkZ);
-        if (columnCache.containsKey(cKey) || loadedChunks.contains(cKey)) {
+        if (columnCache.containsKey(cKey)) {
             return true;
         }
         int rx = chunkX >> 5;
@@ -319,10 +319,10 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             return false;
         }
         McaRegionReader reader = getOrOpenRegion(rx, rz);
-        if (reader == null) {
+        if (reader == null || !reader.hasChunk(chunkX & 31, chunkZ & 31)) {
             return false;
         }
-        return reader.hasChunk(chunkX & 31, chunkZ & 31);
+        return getColumn(chunkX, chunkZ) != null;
     }
 
     @Override
