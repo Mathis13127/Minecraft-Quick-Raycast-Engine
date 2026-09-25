@@ -506,6 +506,36 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         }
     }
 
+    /**
+     * Invalidates a cached chunk column and refreshes the underlying region reader
+     * after external or direct disk writes.
+     *
+     * @param chunkX World chunk X
+     * @param chunkZ World chunk Z
+     */
+    public void invalidateChunk(int chunkX, int chunkZ) {
+        long cKey = chunkKey(chunkX, chunkZ);
+        columnCache.remove(cKey);
+        loadedChunks.remove(cKey);
+
+        int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == cKey) {
+            l1Columns[slot] = null;
+            l1Keys[slot] = 0;
+        }
+
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        long rKey = regionKey(rx, rz);
+        missingRegions.remove(rKey);
+        regionHeightmaps.remove(rKey);
+
+        McaRegionReader reader = regions.get(rKey);
+        if (reader != null) {
+            reader.refreshHeaderIfPossible();
+        }
+    }
+
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
         VoxelChunkColumn column = getColumn(sectionX, sectionZ);

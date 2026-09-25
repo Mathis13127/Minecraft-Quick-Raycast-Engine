@@ -278,6 +278,23 @@ public final class FastNbtReader {
     }
 
     /**
+     * Parses a root NBT TAG_Compound from the beginning of an NBT stream (reading root tag type and name).
+     *
+     * @param buf Byte buffer positioned at the start of the root tag
+     * @return Map of tag names to values
+     */
+    public static Map<String, Object> parseRootCompound(ByteBuffer buf) {
+        if (!buf.hasRemaining()) return java.util.Collections.emptyMap();
+        byte rootType = buf.get();
+        if (rootType != TAG_COMPOUND) {
+            throw new IllegalArgumentException("Expected root tag to be TAG_Compound (10), got: " + rootType);
+        }
+        int nameLen = buf.getShort() & 0xFFFF;
+        buf.position(buf.position() + nameLen);
+        return parseCompound(buf);
+    }
+
+    /**
      * Parses an NBT TAG_Compound into a standard Map representation.
      *
      * @param buf Byte buffer positioned at the start of a compound's payload (after name)

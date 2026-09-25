@@ -300,13 +300,24 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
     }
 
     /**
-     * Invalidates an entire chunk column from the in-memory cache.
+     * Invalidates an entire chunk column from the in-memory cache and cascades to disk fallback.
      *
      * @param chunkX Chunk X coordinate
      * @param chunkZ Chunk Z coordinate
      */
     public void invalidateChunk(int chunkX, int chunkZ) {
-        columns.remove(chunkKey(chunkX, chunkZ));
+        long cKey = chunkKey(chunkX, chunkZ);
+        columns.remove(cKey);
+
+        int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == cKey) {
+            l1Columns[slot] = null;
+            l1Keys[slot] = 0;
+        }
+
+        if (diskFallback instanceof com.pixel.qve.mca.McaVoxelGrid mcaGrid) {
+            mcaGrid.invalidateChunk(chunkX, chunkZ);
+        }
     }
 
     /**

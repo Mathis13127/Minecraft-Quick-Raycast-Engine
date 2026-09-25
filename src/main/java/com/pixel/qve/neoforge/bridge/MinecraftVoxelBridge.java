@@ -127,9 +127,31 @@ public final class MinecraftVoxelBridge {
         }
 
         Block block = state.getBlock();
-        String fullStateKey = state.toString();
+        net.minecraft.resources.ResourceLocation blockLoc = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block);
+        String blockKeyStr = (blockLoc != null) ? blockLoc.toString() : "minecraft:air";
+
+        String fullStateKey;
+        var values = state.getValues();
+        if (values.isEmpty()) {
+            fullStateKey = blockKeyStr;
+        } else {
+            StringBuilder sb = new StringBuilder(blockKeyStr).append('[');
+            boolean first = true;
+            for (var entry : values.entrySet()) {
+                if (!first) sb.append(',');
+                first = false;
+                @SuppressWarnings({"rawtypes", "unchecked"})
+                net.minecraft.world.level.block.state.properties.Property prop = entry.getKey();
+                @SuppressWarnings("unchecked")
+                String vName = prop.getName(entry.getValue());
+                sb.append(entry.getKey().getName()).append('=').append(vName);
+            }
+            sb.append(']');
+            fullStateKey = sb.toString();
+        }
 
         int id = BLOCK_REGISTRY.getOrRegister(fullStateKey);
+        BLOCK_REGISTRY.getStateDictionary().registerState(stateId > 0 ? (long) stateId : fullStateKey.hashCode(), id, fullStateKey);
         VoxelShape shape = resolveShapeForState(state, block);
         if (shape != VoxelShape.FULL_CUBE) {
             SHAPE_REGISTRY.registerShape(id, shape);
@@ -138,7 +160,6 @@ public final class MinecraftVoxelBridge {
         TRAIT_REGISTRY.setTraits(id, traits);
 
         var propRegistry = BLOCK_REGISTRY.getStateDictionary().getPropertyRegistry();
-        var values = state.getValues();
         if (!values.isEmpty()) {
             short[] pairs = new short[values.size() * 2];
             int pIdx = 0;

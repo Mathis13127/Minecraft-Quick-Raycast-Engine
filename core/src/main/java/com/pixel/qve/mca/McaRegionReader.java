@@ -164,13 +164,17 @@ public final class McaRegionReader implements Closeable {
             if (currentSize < 4096) {
                 return;
             }
-            if (currentSize > mmap.capacity()) {
-                DirectBufferCleaner.clean(this.mmap);
+            if (mmap == null || currentSize != mmap.capacity()) {
+                if (mmap != null) {
+                    DirectBufferCleaner.clean(this.mmap);
+                }
                 this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, currentSize);
             }
-            MappedByteBuffer curMmap = this.mmap;
+            ByteBuffer hBuf = ByteBuffer.allocate(4096);
+            channel.read(hBuf, 0);
+            hBuf.flip();
             for (int i = 0; i < 1024; i++) {
-                int val = curMmap.getInt(i * 4);
+                int val = hBuf.getInt(i * 4);
                 int sectorOffset = (val >>> 8) & 0xFFFFFF;
                 int sectorCount = val & 0xFF;
                 sectorOffsets[i] = (sectorCount > 0) ? sectorOffset : 0;
@@ -360,7 +364,7 @@ public final class McaRegionReader implements Closeable {
         return BlockIdRegistry.AIR_ID;
     }
 
-    private ByteBuffer decompressChunk(int localChunkX, int localChunkZ) {
+    public ByteBuffer decompressChunk(int localChunkX, int localChunkZ) {
         int idx = localChunkX + localChunkZ * 32;
         int sectorOffset = sectorOffsets[idx];
         if (sectorOffset == 0) {

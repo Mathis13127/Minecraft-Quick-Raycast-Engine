@@ -82,8 +82,8 @@ public class QuickVoxelEngineMod {
      */
     @SubscribeEvent
     public void onRegisterCommands(net.neoforged.neoforge.event.RegisterCommandsEvent event) {
-        com.pixel.qve.neoforge.command.QveCommand.register(event.getDispatcher());
-        LOGGER.info("[RaycastEngine] Registered /raycast and /qre commands.");
+        com.pixel.qve.neoforge.command.QveCommand.register(event.getDispatcher(), event.getBuildContext());
+        LOGGER.info("[RaycastEngine] Registered /raycast, /qre, and /qve commands.");
     }
 
     /**
@@ -94,6 +94,7 @@ public class QuickVoxelEngineMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         MinecraftVoxelBridge.reset();
-        LOGGER.info("[RaycastEngine] Cleared all voxel grids and cache references on server stop.");
+        com.pixel.qve.neoforge.api.VoxelWriteAPI.reset();
+        LOGGER.info("[RaycastEngine] Cleared all voxel grids, writers, and cache references on server stop.");
     }
 }
