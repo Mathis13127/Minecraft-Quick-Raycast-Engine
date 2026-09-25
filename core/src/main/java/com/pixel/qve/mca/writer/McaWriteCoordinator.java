@@ -157,9 +157,34 @@ public final class McaWriteCoordinator implements Closeable {
                 int localX = task.chunkX() & 31;
                 int localZ = task.chunkZ() & 31;
 
-                // 1. Serialize Chunk NBT
+                // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
                 FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
-                FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
+                boolean patched = false;
+                if (writer.hasChunk(localX, localZ)) {
+                    java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
+                    if (existingPayload != null) {
+                        try {
+                            FastChunkNbtPatcher.patchChunk(
+                                    existingPayload,
+                                    task.chunkX(), task.chunkZ(),
+                                    minSectionY, maxSectionY,
+                                    registry,
+                                    task.sections(),
+                                    task.blockEntities(),
+                                    nbtWriter
+                            );
+                            patched = true;
+                        } catch (Exception e) {
+                            LOGGER.log(System.Logger.Level.WARNING,
+                                    "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
+                                    task.chunkX(), task.chunkZ(), rx, rz, e.getMessage());
+                            nbtWriter.reset();
+                        }
+                    }
+                }
+                if (!patched) {
+                    FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
+                }
                 byte[] uncompressed = nbtWriter.toByteArray();
 
                 // 2. Write payload, syncing header only on the last chunk
@@ -225,9 +250,34 @@ public final class McaWriteCoordinator implements Closeable {
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
 
-            // 1. Serialize Chunk NBT
+            // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
             FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
-            FastChunkNbtWriter.writeChunk(nbtWriter, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities);
+            boolean patched = false;
+            if (writer.hasChunk(localX, localZ)) {
+                java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
+                if (existingPayload != null) {
+                    try {
+                        FastChunkNbtPatcher.patchChunk(
+                                existingPayload,
+                                chunkX, chunkZ,
+                                minSectionY, maxSectionY,
+                                registry,
+                                sections,
+                                blockEntities,
+                                nbtWriter
+                        );
+                        patched = true;
+                    } catch (Exception e) {
+                        LOGGER.log(System.Logger.Level.WARNING,
+                                "Failed to patch existing chunk NBT ({0}, {1}) in region r.{2}.{3}.mca, falling back to full chunk writer: {4}",
+                                chunkX, chunkZ, rx, rz, e.getMessage());
+                        nbtWriter.reset();
+                    }
+                }
+            }
+            if (!patched) {
+                FastChunkNbtWriter.writeChunk(nbtWriter, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities);
+            }
             byte[] uncompressed = nbtWriter.toByteArray();
 
             // 2. Compress and write payload to region file

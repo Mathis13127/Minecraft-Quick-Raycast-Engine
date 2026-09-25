@@ -125,6 +125,8 @@ public final class McaRegionReader implements Closeable {
             int sectorCount = val & 0xFF;
             sectorOffsets[i] = (sectorCount > 0) ? sectorOffset : 0;
         }
+
+        com.pixel.qve.mca.storage.McaFileChannelManager.getGlobal().registerReader(regionX, regionZ, this);
     }
 
     /**
@@ -601,6 +603,7 @@ public final class McaRegionReader implements Closeable {
 
     @Override
     public void close() throws IOException {
+        com.pixel.qve.mca.storage.McaFileChannelManager.getGlobal().unregisterReader(regionX, regionZ, this);
         DirectBufferCleaner.clean(this.mmap);
         this.mmap = null;
         try {

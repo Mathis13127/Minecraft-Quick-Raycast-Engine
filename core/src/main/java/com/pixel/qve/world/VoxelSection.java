@@ -41,8 +41,8 @@ public final class VoxelSection {
     private final long[] bitmask;
     private int[] blockIds;
     private int solidCount;
-    private final boolean isHomogeneous;
-    private final int singleBlockId;
+    private volatile boolean isHomogeneous;
+    private volatile int singleBlockId;
     private boolean allSolidAreFullCubes;
 
     /**
@@ -167,6 +167,22 @@ public final class VoxelSection {
     }
 
     /**
+     * Converts an immutable homogeneous section into a fully mutable dense section.
+     * Thread-safe and idempotent.
+     */
+    public synchronized void demoteToMutable() {
+        if (!isHomogeneous) {
+            return;
+        }
+        int[] denseIds = new int[VOXEL_COUNT];
+        if (singleBlockId != 0) {
+            Arrays.fill(denseIds, singleBlockId);
+        }
+        this.blockIds = denseIds;
+        this.isHomogeneous = false;
+    }
+
+    /**
      * Modifies the occupancy and block ID of a local voxel using lock-free atomic hardware primitives.
      *
      * @param x       Local X coordinate [0..15]
@@ -177,7 +193,7 @@ public final class VoxelSection {
      */
     public void setVoxel(int x, int y, int z, boolean solid, int blockId) {
         if (isHomogeneous) {
-            throw new UnsupportedOperationException("Cannot modify an immutable homogeneous VoxelSection");
+            demoteToMutable();
         }
         int idx = voxelIndex(x, y, z);
         int word = idx >>> 6;
@@ -292,7 +308,7 @@ public final class VoxelSection {
      */
     public void clear() {
         if (isHomogeneous) {
-            throw new UnsupportedOperationException("Cannot clear an immutable homogeneous VoxelSection");
+            demoteToMutable();
         }
         Arrays.fill(bitmask, 0L);
         Arrays.fill(blockIds, 0);
@@ -309,7 +325,7 @@ public final class VoxelSection {
      */
     public void populate(long[] mask, int[] blockIds, int solidCount) {
         if (isHomogeneous) {
-            throw new UnsupportedOperationException("Cannot populate an immutable homogeneous VoxelSection");
+            demoteToMutable();
         }
         System.arraycopy(mask, 0, this.bitmask, 0, MASK_WORDS);
         System.arraycopy(blockIds, 0, this.blockIds, 0, VOXEL_COUNT);

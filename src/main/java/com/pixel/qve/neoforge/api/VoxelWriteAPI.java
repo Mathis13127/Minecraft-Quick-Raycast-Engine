@@ -78,12 +78,23 @@ public final class VoxelWriteAPI {
                     WriteResult.failure(WriteStatus.FAIL_INVALID_COORDINATES, 0, 0, "Arguments cannot be null")
             );
         }
+        if (pos.getY() < level.getMinBuildHeight() || pos.getY() >= level.getMaxBuildHeight()) {
+            return CompletableFuture.completedFuture(
+                    WriteResult.failure(WriteStatus.FAIL_INVALID_COORDINATES, pos.getX() >> 4, pos.getZ() >> 4,
+                            "World Y coordinate " + pos.getY() + " is outside dimension bounds [" + level.getMinBuildHeight() + ".." + (level.getMaxBuildHeight() - 1) + "]")
+            );
+        }
         return getWriter(level).setBlockUnifiedAsync(pos, state, flags, blockEntityNbt);
     }
 
     /**
      * Modifies an existing chunk OR creates a brand new chunk ex-nihilo,
      * routing automatically to RAM if loaded or to MCA disk if unloaded.
+     * <p>
+     * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+     * If the chunk does not exist and is created ex-nihilo on disk, {@code Status: "minecraft:full"} is written.<br>
+     * This permanently locks the chunk and disables natural seed-based terrain and structure generation!
+     * </p>
      *
      * @param level    Minecraft Level
      * @param chunkX   World chunk X
@@ -107,6 +118,11 @@ public final class VoxelWriteAPI {
     /**
      * Sets a block directly on disk in an UNLOADED chunk.
      * Strictly fails with {@link WriteStatus#FAIL_CHUNK_LOADED_IN_RAM} if the chunk is currently in RAM.
+     * <p>
+     * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+     * If the chunk does not exist on disk and is created ex-nihilo, {@code Status: "minecraft:full"} is written.<br>
+     * This permanently locks the chunk and disables natural seed-based terrain and structure generation!
+     * </p>
      *
      * @param level          Minecraft Level
      * @param pos            Absolute BlockPos
@@ -120,6 +136,12 @@ public final class VoxelWriteAPI {
                     WriteResult.failure(WriteStatus.FAIL_INVALID_COORDINATES, 0, 0, "Arguments cannot be null")
             );
         }
+        if (pos.getY() < level.getMinBuildHeight() || pos.getY() >= level.getMaxBuildHeight()) {
+            return CompletableFuture.completedFuture(
+                    WriteResult.failure(WriteStatus.FAIL_INVALID_COORDINATES, pos.getX() >> 4, pos.getZ() >> 4,
+                            "World Y coordinate " + pos.getY() + " is outside dimension bounds [" + level.getMinBuildHeight() + ".." + (level.getMaxBuildHeight() - 1) + "]")
+            );
+        }
         return getWriter(level).setBlockDirectAsync(pos, state, blockEntityNbt);
     }
 
@@ -127,6 +149,11 @@ public final class VoxelWriteAPI {
      * Creates a new chunk OR modifies an existing UNLOADED chunk directly in an Anvil (.mca) region file.
      * If the r.X.Z.mca file does not exist yet on disk, it is automatically created with an 8KB Anvil header.
      * Strictly fails with {@link WriteStatus#FAIL_CHUNK_LOADED_IN_RAM} if the chunk is currently in RAM.
+     * <p>
+     * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+     * If the chunk does not exist on disk and is created ex-nihilo, {@code Status: "minecraft:full"} is written.<br>
+     * This permanently locks the chunk and disables natural seed-based terrain and structure generation!
+     * </p>
      *
      * @param level    Minecraft Level
      * @param chunkX   World chunk X

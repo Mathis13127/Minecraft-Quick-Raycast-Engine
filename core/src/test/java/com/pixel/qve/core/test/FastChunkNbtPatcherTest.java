@@ -1,0 +1,174 @@
+package com.pixel.qve.core.test;
+
+import com.pixel.qve.mca.FastNbtReader;
+import com.pixel.qve.mca.writer.FastChunkNbtPatcher;
+import com.pixel.qve.mca.writer.FastChunkNbtWriter;
+import com.pixel.qve.mca.writer.FastNbtWriter;
+import com.pixel.qve.state.BlockIdRegistry;
+import com.pixel.qve.world.VoxelSection;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class FastChunkNbtPatcherTest {
+
+    @Test
+    @DisplayName("Verify FastChunkNbtPatcher preserves Status, biomes, structures, and custom tags")
+    void testPatchPreservesMetadataAndBiomes() {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        int stoneId = registry.getOrRegister("minecraft:stone");
+
+        // 1. Synthesize an existing chunk NBT
+        FastNbtWriter originalWriter = new FastNbtWriter();
+        originalWriter.beginRootCompound("")
+                .putInt("DataVersion", 3955)
+                .putInt("xPos", 10)
+                .putInt("yPos", -4)
+                .putInt("zPos", 20)
+                .putString("Status", "minecraft:features")
+                .putLong("InhabitedTime", 987654321L)
+                .beginCompound("structures")
+                    .putString("type", "minecraft:mineshaft")
+                .endCompound()
+                .beginList("sections", FastNbtReader.TAG_COMPOUND, 2)
+                    // Section 0: Desert biome
+                    .beginListCompound()
+                        .putByte("Y", (byte) 0)
+                        .beginCompound("biomes")
+                            .beginList("palette", FastNbtReader.TAG_STRING, 1)
+                                .putListString("minecraft:desert")
+                        .endCompound()
+                        .beginCompound("block_states")
+                            .beginList("palette", FastNbtReader.TAG_COMPOUND, 1)
+                                .beginListCompound()
+                                    .putString("Name", "minecraft:air")
+                                .endCompound()
+                        .endCompound()
+                    .endCompound()
+                    // Section 1: Badlands biome
+                    .beginListCompound()
+                        .putByte("Y", (byte) 1)
+                        .beginCompound("biomes")
+                            .beginList("palette", FastNbtReader.TAG_STRING, 1)
+                                .putListString("minecraft:badlands")
+                        .endCompound()
+                        .beginCompound("block_states")
+                            .beginList("palette", FastNbtReader.TAG_COMPOUND, 1)
+                                .beginListCompound()
+                                    .putString("Name", "minecraft:air")
+                                .endCompound()
+                        .endCompound()
+                    .endCompound()
+                .endCompound()
+                .endCompound();
+
+        ByteBuffer existingNbt = originalWriter.toReadBuffer();
+
+        // 2. Prepare modifications: update Section 0 with Stone
+        VoxelSection modifiedSection0 = new VoxelSection();
+        modifiedSection0.setVoxel(0, 0, 0, true, stoneId);
+        Map<Integer, VoxelSection> modifiedSections = new HashMap<>();
+        modifiedSections.put(0, modifiedSection0);
+
+        // 3. Patch chunk
+        FastNbtWriter patchedWriter = new FastNbtWriter();
+        FastChunkNbtPatcher.patchChunk(
+                existingNbt,
+                10, 20,
+                -4, 19,
+                registry,
+                modifiedSections,
+                null,
+                patchedWriter
+        );
+
+        // 4. Verify patched NBT
+        ByteBuffer patchedBuf = patchedWriter.toReadBuffer();
+        Map<String, Object> root = FastNbtReader.parseRootCompound(patchedBuf);
+
+        assertNotNull(root);
+        assertEquals(3955, root.get("DataVersion"));
+        assertEquals(10, root.get("xPos"));
+        assertEquals(20, root.get("zPos"));
+        // Status MUST NOT be overwritten with "minecraft:full"
+        assertEquals("minecraft:features", root.get("Status"));
+        assertEquals(987654321L, root.get("InhabitedTime"));
+
+        // Structures MUST be preserved
+        @SuppressWarnings("unchecked")
+        Map<String, Object> structures = (Map<String, Object>) root.get("structures");
+        assertNotNull(structures);
+        assertEquals("minecraft:mineshaft", structures.get("type"));
+
+        // Sections MUST preserve desert and badlands biomes
+        @SuppressWarnings("unchecked")
+        List<Object> sections = (List<Object>) root.get("sections");
+        assertNotNull(sections);
+        assertEquals(2, sections.size());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sec0 = (Map<String, Object>) sections.get(0);
+        assertEquals((byte) 0, sec0.get("Y"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> biomes0 = (Map<String, Object>) sec0.get("biomes");
+        assertNotNull(biomes0);
+        @SuppressWarnings("unchecked")
+        List<Object> bioPalette0 = (List<Object>) biomes0.get("palette");
+        assertEquals("minecraft:desert", bioPalette0.get(0));
+
+        // Section 0 block_states must now include stone
+        @SuppressWarnings("unchecked")
+        Map<String, Object> bs0 = (Map<String, Object>) sec0.get("block_states");
+        assertNotNull(bs0);
+        @SuppressWarnings("unchecked")
+        List<Object> pal0 = (List<Object>) bs0.get("palette");
+        boolean foundStone = false;
+        for (Object o : pal0) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> entry = (Map<String, Object>) o;
+            if ("minecraft:stone".equals(entry.get("Name"))) {
+                foundStone = true;
+                break;
+            }
+        }
+        assertTrue(foundStone, "Patched section 0 must contain minecraft:stone");
+
+        // Section 1 biome must remain badlands
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sec1 = (Map<String, Object>) sections.get(1);
+        System.out.println("DEBUG SEC0: " + sec0);
+        System.out.println("DEBUG SEC1: " + sec1);
+        assertEquals((byte) 1, sec1.get("Y"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> biomes1 = (Map<String, Object>) sec1.get("biomes");
+        @SuppressWarnings("unchecked")
+        List<Object> bioPalette1 = (List<Object>) biomes1.get("palette");
+        assertEquals("minecraft:badlands", bioPalette1.get(0));
+
+        // Heightmaps must be present
+        assertTrue(root.containsKey("Heightmaps"));
+    }
+
+    @Test
+    @DisplayName("Verify VoxelSection automatically demotes homogeneous sections to mutable on write")
+    void testHomogeneousSectionDemotion() {
+        VoxelSection sec = VoxelSection.createHomogeneous(5, true);
+        assertTrue(sec.isHomogeneous());
+        assertEquals(5, sec.getBlockId(0, 0, 0));
+        assertEquals(5, sec.getBlockId(15, 15, 15));
+
+        // Modifying a voxel must NOT throw UnsupportedOperationException
+        sec.setVoxel(3, 4, 5, true, 42);
+
+        assertFalse(sec.isHomogeneous());
+        assertEquals(42, sec.getBlockId(3, 4, 5));
+        assertEquals(5, sec.getBlockId(0, 0, 0));
+        assertEquals(5, sec.getBlockId(15, 15, 15));
+    }
+}

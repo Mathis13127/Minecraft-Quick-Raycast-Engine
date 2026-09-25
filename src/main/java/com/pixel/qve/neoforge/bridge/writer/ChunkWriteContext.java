@@ -10,6 +10,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Concrete implementation of IChunkWriteContext for assembling and modifying chunk data.
+ * <p>
+ * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+ * When writing new chunks ex-nihilo, {@code Status: "minecraft:full"} is written to the MCA file.
+ * Minecraft's terrain generator will permanently skip seed-based terrain generation for any chunk
+ * created this way!
+ * </p>
  */
 public class ChunkWriteContext implements IChunkWriteContext {
 
@@ -55,7 +61,9 @@ public class ChunkWriteContext implements IChunkWriteContext {
     public void setBlock(int localX, int worldY, int localZ, int blockId) {
         int secY = worldY >> 4;
         if (secY < minSectionY || secY > maxSectionY) {
-            return;
+            throw new IllegalArgumentException(String.format(
+                    "World Y coordinate %d (section %d) is outside chunk section bounds [%d..%d] (world Y [%d..%d])",
+                    worldY, secY, minSectionY, maxSectionY, minSectionY << 4, (maxSectionY << 4) + 15));
         }
 
         VoxelSection section = sections.computeIfAbsent(secY, k -> new VoxelSection());
@@ -80,7 +88,9 @@ public class ChunkWriteContext implements IChunkWriteContext {
     @Override
     public void setSection(int sectionY, VoxelSection section) {
         if (sectionY < minSectionY || sectionY > maxSectionY) {
-            return;
+            throw new IllegalArgumentException(String.format(
+                    "Section Y %d is outside chunk section bounds [%d..%d]",
+                    sectionY, minSectionY, maxSectionY));
         }
         if (section != null) {
             sections.put(sectionY, section);

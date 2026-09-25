@@ -164,12 +164,16 @@ public final class MinecraftVoxelWriter implements Closeable {
             }
         }).thenApply(res -> {
             if (res.isSuccess()) {
-                MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
-                if (grid != null) {
-                    int readId = grid.getBlockId(pos.getX(), pos.getY(), pos.getZ());
+                boolean verified = verifyPhysicalDiskWrite(cx, cz, pos.getX() & 15, pos.getY(), pos.getZ() & 15, blockId);
+                if (verified) {
+                    return res.withVerification(true, expectedName);
+                } else {
+                    MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
+                    int readId = (grid != null) ? grid.getBlockId(pos.getX(), pos.getY(), pos.getZ()) : -1;
                     String readName = MinecraftVoxelBridge.getBlockRegistry().getName(readId);
-                    boolean verified = (readId == blockId) || (readName != null && readName.equals(expectedName));
-                    return res.withVerification(verified, readName != null ? readName : "minecraft:air");
+                    return WriteResult.failure(WriteStatus.FAIL_VERIFICATION_MISMATCH, cx, cz,
+                            "Physical disk verification failed at " + pos + ": expected " + expectedName + ", found " + (readName != null ? readName : "unreadable"))
+                            .withVerification(false, readName != null ? readName : "minecraft:air");
                 }
             }
             return res;
@@ -285,13 +289,69 @@ public final class MinecraftVoxelWriter implements Closeable {
     }
 
     /**
+     * Reads the physical Anvil (.mca) file from disk and verifies that the block at the specified
+     * position matches the expected block ID.
+     *
+     * @param chunkX          World chunk X
+     * @param chunkZ          World chunk Z
+     * @param localX          Local block X [0..15]
+     * @param worldY          World block Y
+     * @param localZ          Local block Z [0..15]
+     * @param expectedBlockId Expected Block ID in BlockIdRegistry
+     * @return True if block physically on disk matches expectedBlockId
+     */
+    public boolean verifyPhysicalDiskWrite(int chunkX, int chunkZ, int localX, int worldY, int localZ, int expectedBlockId) {
+        if (regionDirectory == null) {
+            return false;
+        }
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
+        if (!Files.isRegularFile(mcaFile)) {
+            return false;
+        }
+
+        try (com.pixel.qve.mca.McaRegionReader directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry())) {
+            int localCx = chunkX & 31;
+            int localCz = chunkZ & 31;
+            int secY = worldY >> 4;
+            int[] foundId = new int[]{-1};
+            directReader.readChunk(localCx, localCz, (sy, sec) -> {
+                if (sy == secY && sec != null) {
+                    foundId[0] = sec.getBlockId(localX & 15, worldY & 15, localZ & 15);
+                }
+            });
+            return foundId[0] == expectedBlockId;
+        } catch (Exception e) {
+            LOGGER.warn("Physical disk verification failed for chunk ({}, {}): {}", chunkX, chunkZ, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Prepares a ChunkWriteContext pre-loading existing voxel data from disk if the chunk already exists.
      */
     public ChunkWriteContext prepareChunkContext(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
         VoxelChunkColumn existingColumn = (grid != null) ? grid.getColumn(chunkX, chunkZ) : null;
-        boolean isNew = (existingColumn == null);
+        boolean hasOnDisk = false;
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        Path mcaFile = (regionDirectory != null) ? regionDirectory.resolve("r." + rx + "." + rz + ".mca") : null;
 
+        if (existingColumn == null && mcaFile != null && Files.isRegularFile(mcaFile)) {
+            try (com.pixel.qve.mca.McaRegionReader directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry())) {
+                int localCx = chunkX & 31;
+                int localCz = chunkZ & 31;
+                if (directReader.hasChunk(localCx, localCz)) {
+                    hasOnDisk = true;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Failed to check existing chunk ({}, {}) in {}: {}", chunkX, chunkZ, mcaFile, e.getMessage());
+            }
+        }
+
+        boolean isNew = (existingColumn == null && !hasOnDisk);
         int minSec = level.getMinSection();
         int maxSec = level.getMinSection() + level.getSectionsCount() - 1;
         ChunkWriteContext context = new ChunkWriteContext(chunkX, chunkZ, minSec, maxSec, isNew);
@@ -303,25 +363,18 @@ public final class MinecraftVoxelWriter implements Closeable {
                     context.setSection(sy, sec.copy());
                 }
             }
-        } else if (regionDirectory != null) {
-            int rx = chunkX >> 5;
-            int rz = chunkZ >> 5;
-            Path mcaFile = regionDirectory.resolve("r." + rx + "." + rz + ".mca");
-            if (Files.isRegularFile(mcaFile)) {
-                try (com.pixel.qve.mca.McaRegionReader directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry())) {
-                    int localCx = chunkX & 31;
-                    int localCz = chunkZ & 31;
-                    if (directReader.hasChunk(localCx, localCz)) {
-                        directReader.readChunk(localCx, localCz, (secY, sec) -> {
-                            if (sec != null && !sec.isEmpty()) {
-                                context.setSection(secY, sec.copy());
-                            }
-                        });
+        } else if (hasOnDisk && mcaFile != null) {
+            try (com.pixel.qve.mca.McaRegionReader directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry())) {
+                int localCx = chunkX & 31;
+                int localCz = chunkZ & 31;
+                directReader.readChunk(localCx, localCz, (secY, sec) -> {
+                    if (sec != null && !sec.isEmpty()) {
+                        context.setSection(secY, sec.copy());
                     }
-                } catch (Exception e) {
-                    LOGGER.warn("Failed to direct-read existing chunk ({}, {}) from {}: {}",
-                            chunkX, chunkZ, mcaFile, e.getMessage());
-                }
+                });
+            } catch (Exception e) {
+                LOGGER.warn("Failed to direct-read existing chunk ({}, {}) from {}: {}",
+                        chunkX, chunkZ, mcaFile, e.getMessage());
             }
         }
 
@@ -384,20 +437,29 @@ public final class MinecraftVoxelWriter implements Closeable {
                 continue;
             }
 
-            ChunkWriteContext context = prepareChunkContext(cx, cz, ctx -> {
-                for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
-                    ctx.setSection(secEntry.getKey(), secEntry.getValue());
-                }
-                for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                    int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
-                    if (m.matchesFilter(curId, null)) {
-                        ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
-                        if (m.rawNbt() != null) {
-                            ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+            ChunkWriteContext context;
+            try {
+                context = prepareChunkContext(cx, cz, ctx -> {
+                    for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
+                        ctx.setSection(secEntry.getKey(), secEntry.getValue());
+                    }
+                    for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+                        int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
+                        if (m.matchesFilter(curId, null)) {
+                            ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
+                            if (m.rawNbt() != null) {
+                                ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+                            }
                         }
                     }
-                }
-            });
+                });
+            } catch (Throwable t) {
+                LOGGER.error("Failed to prepare chunk context for ({}, {}): {}", cx, cz, t.getMessage(), t);
+                ramFutures.add(CompletableFuture.completedFuture(
+                        WriteResult.failure(WriteStatus.FAIL_IO_ERROR, cx, cz, t.getMessage())
+                ));
+                continue;
+            }
 
             // Fire pre-write event
             ChunkPreDirectWriteEvent preEvent = new ChunkPreDirectWriteEvent(level, cx, cz, context);

@@ -397,4 +397,60 @@ public class VoxelWriteAPITest {
             }
         }
     }
+
+    @Test
+    @DisplayName("ChunkWriteContext strictly rejects out-of-bounds Y coordinates with IllegalArgumentException")
+    void testChunkWriteContextOutOfBoundsThrows() {
+        ChunkWriteContext ctx = new ChunkWriteContext(0, 0, -4, 19, true);
+
+        // Valid section bounds: minSectionY = -4 (Y = -64), maxSectionY = 19 (Y = 319)
+        assertDoesNotThrow(() -> ctx.setBlock(0, -64, 0, 1));
+        assertDoesNotThrow(() -> ctx.setBlock(0, 319, 0, 1));
+
+        // Out of bounds: Y = -65, Y = 320
+        assertThrows(IllegalArgumentException.class, () -> ctx.setBlock(0, -65, 0, 1));
+        assertThrows(IllegalArgumentException.class, () -> ctx.setBlock(0, 320, 0, 1));
+
+        // Section out of bounds: -5, 20
+        VoxelSection dummy = new VoxelSection();
+        assertThrows(IllegalArgumentException.class, () -> ctx.setSection(-5, dummy));
+        assertThrows(IllegalArgumentException.class, () -> ctx.setSection(20, dummy));
+    }
+
+    @Test
+    @DisplayName("VoxelWriteAPI rejects out-of-bounds Y coordinates with FAIL_INVALID_COORDINATES")
+    void testVoxelWriteApiOutOfBoundsRejection() throws Exception {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+        org.mockito.Mockito.when(mockLevel.dimension()).thenReturn(Level.OVERWORLD);
+
+        BlockState stone = Blocks.STONE.defaultBlockState();
+
+        // Below min build height
+        WriteResult resLow = com.pixel.qve.neoforge.api.VoxelWriteAPI.setBlockUnifiedAsync(
+                mockLevel, new BlockPos(0, -65, 0), stone
+        ).get(5, TimeUnit.SECONDS);
+        assertEquals(WriteStatus.FAIL_INVALID_COORDINATES, resLow.status());
+        assertFalse(resLow.isSuccess());
+
+        // Above max build height
+        WriteResult resHigh = com.pixel.qve.neoforge.api.VoxelWriteAPI.setBlockDirectAsync(
+                mockLevel, new BlockPos(0, 320, 0), stone, null
+        ).get(5, TimeUnit.SECONDS);
+        assertEquals(WriteStatus.FAIL_INVALID_COORDINATES, resHigh.status());
+        assertFalse(resHigh.isSuccess());
+    }
+
+    @Test
+    @DisplayName("WriteResult with FAIL_VERIFICATION_MISMATCH correctly reports failure and metadata")
+    void testVerificationMismatchHandling() {
+        WriteResult res = WriteResult.failure(WriteStatus.FAIL_VERIFICATION_MISMATCH, 5, 5, "Verification mismatch")
+                .withVerification(false, "minecraft:stone");
+
+        assertFalse(res.isSuccess());
+        assertEquals(WriteStatus.FAIL_VERIFICATION_MISMATCH, res.status());
+        assertFalse(res.isVerified());
+        assertEquals("minecraft:stone", res.verifiedBlock());
+    }
 }

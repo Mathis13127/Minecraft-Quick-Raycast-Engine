@@ -44,7 +44,18 @@ public final class FastChunkNbtWriter {
     private FastChunkNbtWriter() {}
 
     /**
-     * Serializes a complete 1.21.1 Chunk NBT structure into the target FastNbtWriter.
+     * Serializes a complete 1.21.1 Chunk NBT structure into the target FastNbtWriter using default biome ("minecraft:plains").
+     * <p>
+     * <b>========================================================================</b><br>
+     * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING (STATUS: minecraft:full):</b><br>
+     * Ex-nihilo creation of a chunk NBT writes {@code Status: "minecraft:full"}.<br>
+     * When Minecraft loads a chunk marked with {@code Status: "minecraft:full"}, the internal<br>
+     * ChunkStatus pipeline considers terrain generation, biomes, carvers, surface, features,<br>
+     * and structure generation to be 100% COMPLETE.<br>
+     * <b>Minecraft's world generation will NEVER generate terrain or structures over this chunk from the world seed!</b><br>
+     * This chunk is permanently locked to whatever blocks and state were written here.<br>
+     * <b>========================================================================</b>
+     * </p>
      *
      * @param writer        Target FastNbtWriter
      * @param chunkX        World chunk X
@@ -60,6 +71,39 @@ public final class FastChunkNbtWriter {
                                   BlockIdRegistry registry,
                                   Map<Integer, VoxelSection> sections,
                                   Map<Long, byte[]> blockEntities) {
+        writeChunk(writer, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities, "minecraft:plains");
+    }
+
+    /**
+     * Serializes a complete 1.21.1 Chunk NBT structure into the target FastNbtWriter with a configurable default biome.
+     * <p>
+     * <b>========================================================================</b><br>
+     * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING (STATUS: minecraft:full):</b><br>
+     * Ex-nihilo creation of a chunk NBT writes {@code Status: "minecraft:full"}.<br>
+     * When Minecraft loads a chunk marked with {@code Status: "minecraft:full"}, the internal<br>
+     * ChunkStatus pipeline considers terrain generation, biomes, carvers, surface, features,<br>
+     * and structure generation to be 100% COMPLETE.<br>
+     * <b>Minecraft's world generation will NEVER generate terrain or structures over this chunk from the world seed!</b><br>
+     * This chunk is permanently locked to whatever blocks and state were written here.<br>
+     * <b>========================================================================</b>
+     * </p>
+     *
+     * @param writer        Target FastNbtWriter
+     * @param chunkX        World chunk X
+     * @param chunkZ        World chunk Z
+     * @param minSectionY   Minimum section Y (e.g. -4 for overworld)
+     * @param maxSectionY   Maximum section Y (e.g. 19 for overworld)
+     * @param registry      BlockIdRegistry for state resolution
+     * @param sections      Map of section Y to VoxelSection
+     * @param blockEntities Map of packed coordinate to raw BlockEntity NBT compounds
+     * @param defaultBiome  Default biome identifier (e.g. "minecraft:plains")
+     */
+    public static void writeChunk(FastNbtWriter writer, int chunkX, int chunkZ,
+                                  int minSectionY, int maxSectionY,
+                                  BlockIdRegistry registry,
+                                  Map<Integer, VoxelSection> sections,
+                                  Map<Long, byte[]> blockEntities,
+                                  String defaultBiome) {
         Objects.requireNonNull(writer, "FastNbtWriter cannot be null");
         Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
 
@@ -81,7 +125,7 @@ public final class FastChunkNbtWriter {
 
             VoxelSection section = (sections != null) ? sections.get(secY) : null;
             writeSectionBlockStates(writer, section, registry);
-            writeSectionBiomes(writer);
+            writeSectionBiomes(writer, defaultBiome);
 
             writer.endCompound();
         }
@@ -104,7 +148,7 @@ public final class FastChunkNbtWriter {
         writer.endCompound();
     }
 
-    private static void writeSectionBlockStates(FastNbtWriter writer, VoxelSection section, BlockIdRegistry registry) {
+    static void writeSectionBlockStates(FastNbtWriter writer, VoxelSection section, BlockIdRegistry registry) {
         writer.beginCompound(BLOCK_STATES_NAME);
 
         if (section == null || section.isEmpty()) {
@@ -234,15 +278,15 @@ public final class FastChunkNbtWriter {
         writer.endCompound();
     }
 
-    private static void writeSectionBiomes(FastNbtWriter writer) {
+    static void writeSectionBiomes(FastNbtWriter writer, String biome) {
         writer.beginCompound(BIOMES_NAME);
         writer.beginList(PALETTE_NAME, FastNbtReader.TAG_STRING, 1);
-        writer.putListString("minecraft:plains");
+        writer.putListString((biome != null && !biome.isEmpty()) ? biome : "minecraft:plains");
         writer.endCompound();
     }
 
-    private static void writeHeightmaps(FastNbtWriter writer, Map<Integer, VoxelSection> sections,
-                                       int minSectionY, int maxSectionY) {
+    static void writeHeightmaps(FastNbtWriter writer, Map<Integer, VoxelSection> sections,
+                                int minSectionY, int maxSectionY) {
         writer.beginCompound(HEIGHTMAPS_NAME);
 
         // Compute highest solid block per column (256 columns: x=0..15, z=0..15)
@@ -272,18 +316,20 @@ public final class FastChunkNbtWriter {
             }
         }
 
-        // Pack 256 9-bit height values into 37 longs (64 / 9 = 7 entries per long, 256 / 7 = 37 longs)
-        long[] packedHeights = packHeightmap(heights, minWorldY);
+        // Dynamically compute bit depth: ceil(log2(totalHeight + 1))
+        int totalHeight = (maxSectionY - minSectionY + 1) * 16;
+        int bits = Math.max(4, 32 - Integer.numberOfLeadingZeros(totalHeight));
+        long[] packedHeights = packHeightmap(heights, minWorldY, bits);
         writer.putLongArray(MOTION_BLOCKING_NAME, packedHeights);
         writer.putLongArray(WORLD_SURFACE_NAME, packedHeights);
 
         writer.endCompound();
     }
 
-    private static long[] packHeightmap(short[] heights, short minWorldY) {
-        final int bits = 9;
-        final int entriesPerLong = 64 / bits; // 7
-        final int longCount = (256 + entriesPerLong - 1) / entriesPerLong; // 37
+    private static long[] packHeightmap(short[] heights, short minWorldY, int bits) {
+        final int entriesPerLong = 64 / bits;
+        final int longCount = (256 + entriesPerLong - 1) / entriesPerLong;
+        final long mask = (1L << bits) - 1;
         long[] packed = new long[longCount];
 
         int idx = 0;
@@ -292,7 +338,7 @@ public final class FastChunkNbtWriter {
             int count = Math.min(entriesPerLong, 256 - idx);
             for (int e = 0; e < count; e++) {
                 int relH = Math.max(0, heights[idx++] - minWorldY);
-                word |= ((long) (relH & 0x1FF)) << (e * bits);
+                word |= ((long) (relH & mask)) << (e * bits);
             }
             packed[l] = word;
         }

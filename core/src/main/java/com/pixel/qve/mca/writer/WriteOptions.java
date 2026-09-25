@@ -31,6 +31,12 @@ public record WriteOptions(
     public enum CreationPolicy {
         /**
          * Automatically creates missing .mca region files (with blank 8KB header) and blank chunks on disk.
+         * <p>
+         * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+         * Ex-nihilo chunk creation marks the chunk with {@code Status: "minecraft:full"}.
+         * This permanently tells Minecraft's chunk loader that world generation is finished,
+         * completely bypassing natural seed terrain and structure generation!
+         * </p>
          */
         CREATE_IF_MISSING,
 

@@ -140,6 +140,19 @@ public interface IVoxelWorld {
     }
 
     /**
+     * Checks if the specified chunk column exists AND contains actual solid blocks
+     * (filtering out empty chunks generated dynamically by Minecraft as placeholders).
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return True if the chunk contains at least one solid block
+     */
+    default boolean hasSolidData(int chunkX, int chunkZ) {
+        VoxelChunkColumn col = getColumn(chunkX, chunkZ);
+        return col != null && !col.isEmpty() && col.getHeightmap() != null && col.getHeightmap().getHighestY() != com.pixel.qve.world.Heightmap2D.VOID_Y;
+    }
+
+    /**
      * Retrieves the optional 2D heightmap for the specified 512x512 region, or null if uncomputed.
      *
      * @param regionX Region X coordinate (world block X &gt;&gt; 9)

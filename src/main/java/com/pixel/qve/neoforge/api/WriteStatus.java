@@ -26,5 +26,8 @@ public enum WriteStatus {
     FAIL_INVALID_COORDINATES,
 
     /** Chunk or region file does not exist on disk and creation policy forbids ex-nihilo creation. */
-    FAIL_CHUNK_NOT_FOUND
+    FAIL_CHUNK_NOT_FOUND,
+
+    /** Physical disk read-back verification failed to match expected block state. */
+    FAIL_VERIFICATION_MISMATCH
 }

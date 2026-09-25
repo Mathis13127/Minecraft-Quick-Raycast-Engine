@@ -310,7 +310,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     @Override
     public boolean hasChunk(int chunkX, int chunkZ) {
         long cKey = chunkKey(chunkX, chunkZ);
-        if (columnCache.containsKey(cKey)) {
+        if (columnCache.containsKey(cKey) || loadedChunks.contains(cKey)) {
             return true;
         }
         int rx = chunkX >> 5;
@@ -319,10 +319,19 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             return false;
         }
         McaRegionReader reader = getOrOpenRegion(rx, rz);
-        if (reader == null || !reader.hasChunk(chunkX & 31, chunkZ & 31)) {
+        if (reader == null) {
             return false;
         }
-        return getColumn(chunkX, chunkZ) != null;
+        return reader.hasChunk(chunkX & 31, chunkZ & 31);
+    }
+
+    @Override
+    public boolean hasSolidData(int chunkX, int chunkZ) {
+        if (!hasChunk(chunkX, chunkZ)) {
+            return false;
+        }
+        VoxelChunkColumn col = getColumn(chunkX, chunkZ);
+        return col != null && !col.isEmpty() && col.getHeightmap() != null && col.getHeightmap().getHighestY() != com.pixel.qve.world.Heightmap2D.VOID_Y;
     }
 
     @Override
@@ -539,7 +548,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
         if (l1Keys[slot] == cKey) {
             l1Columns[slot] = null;
-            l1Keys[slot] = 0;
+            l1Keys[slot] = Long.MIN_VALUE;
         }
 
         int rx = chunkX >> 5;

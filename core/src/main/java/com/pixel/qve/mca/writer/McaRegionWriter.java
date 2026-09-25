@@ -1,5 +1,7 @@
 package com.pixel.qve.mca.writer;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
@@ -12,6 +14,7 @@ import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.Deflater;
+import java.util.zip.Inflater;
 
 /**
  * Ultra-high-performance writer for Minecraft Anvil (.mca) region files.
@@ -115,6 +118,74 @@ public final class McaRegionWriter implements Closeable {
             return false;
         }
         return allocator.hasChunk(localChunkX + localChunkZ * 32);
+    }
+
+    /**
+     * Reads and decompresses the raw NBT payload for the given local chunk from this region file.
+     *
+     * @param localChunkX Local chunk X [0..31]
+     * @param localChunkZ Local chunk Z [0..31]
+     * @return ByteBuffer containing decompressed NBT root compound, or null if chunk not present or corrupted
+     */
+    public synchronized ByteBuffer readChunkPayload(int localChunkX, int localChunkZ) {
+        if (!hasChunk(localChunkX, localChunkZ)) {
+            return null;
+        }
+        int localIndex = localChunkX + localChunkZ * 32;
+        int loc = allocator.getLocation(localIndex);
+        int sectorOffset = (loc >>> 8) & 0xFFFFFF;
+        int sectorCount = loc & 0xFF;
+        if (sectorOffset < 2 || sectorCount <= 0) {
+            return null;
+        }
+
+        long filePos = (long) sectorOffset * 4096L;
+        try {
+            if (filePos + 5 > channel.size()) {
+                return null;
+            }
+            ByteBuffer header = ByteBuffer.allocate(5);
+            channel.read(header, filePos);
+            header.flip();
+            int length = header.getInt();
+            byte rawCompressionType = header.get();
+            int compressionType = rawCompressionType & 0x7F;
+
+            if (length <= 1 || (filePos + 4 + length) > channel.size()) {
+                return null;
+            }
+
+            int payloadLength = length - 1;
+            ByteBuffer compressed = ByteBuffer.allocate(payloadLength);
+            channel.read(compressed, filePos + 5);
+            compressed.flip();
+
+            if (compressionType == 2) { // ZLIB
+                Inflater inflater = new Inflater();
+                inflater.setInput(compressed.array(), compressed.arrayOffset(), payloadLength);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.max(4096, payloadLength * 3));
+                byte[] buf = new byte[8192];
+                while (!inflater.finished()) {
+                    int read = inflater.inflate(buf);
+                    if (read == 0 && inflater.needsInput()) break;
+                    baos.write(buf, 0, read);
+                }
+                inflater.end();
+                return ByteBuffer.wrap(baos.toByteArray());
+            } else if (compressionType == 1) { // GZIP
+                try (ByteArrayInputStream bais = new ByteArrayInputStream(compressed.array(), compressed.arrayOffset(), payloadLength);
+                     java.util.zip.GZIPInputStream gzip = new java.util.zip.GZIPInputStream(bais)) {
+                    return ByteBuffer.wrap(gzip.readAllBytes());
+                }
+            } else if (compressionType == 3) { // Uncompressed
+                return compressed;
+            }
+        } catch (Exception e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to read chunk payload ({0}, {1}) from region r.{2}.{3}.mca: {4}",
+                    localChunkX, localChunkZ, regionX, regionZ, e.getMessage());
+        }
+        return null;
     }
 
     /**
@@ -265,6 +336,7 @@ public final class McaRegionWriter implements Closeable {
         headerBuffer.flip();
         channel.write(headerBuffer, 0);
         channel.force(false);
+        com.pixel.qve.mca.storage.McaFileChannelManager.getGlobal().notifyRegionModified(regionX, regionZ);
     }
 
     /**
@@ -285,8 +357,15 @@ public final class McaRegionWriter implements Closeable {
         } catch (Throwable t) {
             LOGGER.log(System.Logger.Level.WARNING, "Error syncing header on close for {0}: {1}", filePath, t.getMessage());
         } finally {
-            channel.close();
-            raf.close();
+            try {
+                channel.close();
+            } finally {
+                try {
+                    raf.close();
+                } finally {
+                    com.pixel.qve.mca.storage.NativeBufferCleaner.clean(headerBuffer);
+                }
+            }
         }
     }
 }

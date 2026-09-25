@@ -7,6 +7,12 @@ import java.util.Map;
 /**
  * Context interface for editing or populating chunk data during a direct MCA write operation.
  * Supports sparse block setting, whole-section replacement, and custom BlockEntity NBT injection.
+ * <p>
+ * <b>CRITICAL MINECRAFT WORLD GENERATION WARNING:</b><br>
+ * When writing new chunks ex-nihilo, {@code Status: "minecraft:full"} is written to the MCA file.
+ * Minecraft's terrain generator will permanently skip seed-based terrain generation for any chunk
+ * created this way!
+ * </p>
  */
 public interface IChunkWriteContext {
 
