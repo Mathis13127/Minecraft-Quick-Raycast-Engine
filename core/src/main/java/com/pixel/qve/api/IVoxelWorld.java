@@ -129,6 +129,17 @@ public interface IVoxelWorld {
     }
 
     /**
+     * Checks if the specified chunk column exists and contains data.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return True if the chunk column exists
+     */
+    default boolean hasChunk(int chunkX, int chunkZ) {
+        return getColumn(chunkX, chunkZ) != null;
+    }
+
+    /**
      * Retrieves the optional 2D heightmap for the specified 512x512 region, or null if uncomputed.
      *
      * @param regionX Region X coordinate (world block X &gt;&gt; 9)

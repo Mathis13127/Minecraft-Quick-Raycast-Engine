@@ -308,6 +308,24 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     }
 
     @Override
+    public boolean hasChunk(int chunkX, int chunkZ) {
+        long cKey = chunkKey(chunkX, chunkZ);
+        if (columnCache.containsKey(cKey) || loadedChunks.contains(cKey)) {
+            return true;
+        }
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        if (isRegionEmpty(rx, rz)) {
+            return false;
+        }
+        McaRegionReader reader = getOrOpenRegion(rx, rz);
+        if (reader == null) {
+            return false;
+        }
+        return reader.hasChunk(chunkX & 31, chunkZ & 31);
+    }
+
+    @Override
     public com.pixel.qve.world.RegionHeightmap2D getRegionHeightmap(int regionX, int regionZ) {
         return regionHeightmaps.get(regionKey(regionX, regionZ));
     }
