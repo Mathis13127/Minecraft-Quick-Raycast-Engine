@@ -172,4 +172,29 @@ public class VoxelCacheTest {
         assertTrue(totalRays.get() > 10_000, "Should have completed tens of thousands of rays concurrently, got: " + totalRays.get());
         assertTrue(totalMutations.get() > 100, "Should have completed mutations concurrently, got: " + totalMutations.get());
     }
+
+    @Test
+    @DisplayName("hasColumnInMemory and getColumnInMemory query memory without invoking disk fallback")
+    void testInMemoryColumnQueries() {
+        UnifiedVoxelCache cache = new UnifiedVoxelCache(new BlockIdRegistry(), new ShapeRegistry());
+
+        assertFalse(cache.hasColumnInMemory(10, 20));
+        assertNull(cache.getColumnInMemory(10, 20));
+
+        // Create column in RAM by setting a voxel
+        cache.setVoxel((10 << 4) + 1, 15, (20 << 4) + 1, true, (short) 1);
+
+        assertTrue(cache.hasColumnInMemory(10, 20));
+        VoxelChunkColumn col = cache.getColumnInMemory(10, 20);
+        assertNotNull(col);
+        assertEquals(10, col.getChunkX());
+        assertEquals(20, col.getChunkZ());
+        assertFalse(col.isEmpty());
+        assertNotEquals(Heightmap2D.VOID_Y, col.getHeightmap().getHighestY());
+
+        // Invalidate removes from memory
+        cache.invalidateChunk(10, 20);
+        assertFalse(cache.hasColumnInMemory(10, 20));
+        assertNull(cache.getColumnInMemory(10, 20));
+    }
 }

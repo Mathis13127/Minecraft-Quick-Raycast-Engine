@@ -171,6 +171,50 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
         return null;
     }
 
+    /**
+     * Checks if a chunk column is currently held in RAM memory without querying disk fallback.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return true if loaded in RAM
+     */
+    public boolean hasColumnInMemory(int chunkX, int chunkZ) {
+        long key = chunkKey(chunkX, chunkZ);
+        int slot = (int) ((key ^ (key >>> 16) ^ (key >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == key) {
+            VoxelChunkColumn col = l1Columns[slot];
+            if (col != null && col.getChunkX() == chunkX && col.getChunkZ() == chunkZ) {
+                return true;
+            }
+        }
+        return columns.containsKey(key);
+    }
+
+    /**
+     * Retrieves a chunk column from RAM memory without querying disk fallback.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return VoxelChunkColumn if loaded in RAM, or null
+     */
+    public VoxelChunkColumn getColumnInMemory(int chunkX, int chunkZ) {
+        long key = chunkKey(chunkX, chunkZ);
+        int slot = (int) ((key ^ (key >>> 16) ^ (key >>> 32)) & L1_MASK);
+        if (l1Keys[slot] == key) {
+            VoxelChunkColumn col = l1Columns[slot];
+            if (col != null && col.getChunkX() == chunkX && col.getChunkZ() == chunkZ) {
+                return col;
+            }
+        }
+        VoxelChunkColumn column = columns.get(key);
+        if (column != null) {
+            l1Keys[slot] = key;
+            l1Columns[slot] = column;
+            return column;
+        }
+        return null;
+    }
+
     @Override
     public VoxelSection getSection(int sectionX, int sectionY, int sectionZ) {
         VoxelChunkColumn column = getColumn(sectionX, sectionZ);

@@ -63,4 +63,22 @@ public class McaVoxelGridTest {
         grid.clearCache();
         assertEquals(0, grid.getCachedSectionCount(), "Cache must be empty after clearCache()");
     }
+
+    @Test
+    void testHasSolidData() throws IOException {
+        BlockIdRegistry registry = new BlockIdRegistry();
+        File file00 = new File("src/test/resources/region/r.0.0.mca");
+        if (!file00.exists()) file00 = new File("core/src/test/resources/region/r.0.0.mca");
+        if (!file00.exists()) file00 = new File("raycast-core/src/test/resources/region/r.0.0.mca");
+        assertTrue(file00.exists(), "Region file r.0.0.mca must exist");
+
+        try (McaVoxelGrid grid = new McaVoxelGrid(registry, file00.getParentFile().toPath())) {
+            // Chunk (0, 0) has solid sections in r.0.0.mca
+            assertTrue(grid.hasChunk(0, 0));
+            assertTrue(grid.hasSolidData(0, 0), "Populated chunk in r.0.0.mca must return true for hasSolidData");
+
+            // Out-of-bounds or non-existent chunk in missing region
+            assertFalse(grid.hasSolidData(999, 999), "Non-existent chunk must return false for hasSolidData");
+        }
+    }
 }
