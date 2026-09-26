@@ -69,6 +69,12 @@ neoForge {
 
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+
+            // JDK Flight Recorder (JFR) profiling for memory allocations, GC, and thread metrics
+            jvmArguments.addAll(
+                '-XX:+FlightRecorder',
+                '-XX:StartFlightRecording=filename=raycast-engine-profile.jfr,dumponexit=true,settings=profile'
+            )
         }
 
         server {
