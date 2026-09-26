@@ -421,18 +421,15 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 if (!reader.hasChunk(cx, cz)) continue;
 
                 VoxelChunkColumn column = new VoxelChunkColumn(worldCx, worldCz, minSectionY, maxSectionY);
-                int loaded;
-                synchronized (reader) {
-                    loaded = reader.readChunk(cx, cz, (sectionY, section) -> {
-                        column.setSection(sectionY, section);
-                        if (section != null && !section.isEmpty()) {
-                            short h = column.getHeightmap().getHighestY();
-                            if (h > highestWorldY) {
-                                highestWorldY = h;
-                            }
+                int loaded = reader.readChunk(cx, cz, (sectionY, section) -> {
+                    column.setSection(sectionY, section);
+                    if (section != null && !section.isEmpty()) {
+                        short h = column.getHeightmap().getHighestY();
+                        if (h > highestWorldY) {
+                            highestWorldY = h;
                         }
-                    });
-                }
+                    }
+                });
                 if (loaded > 0) {
                     columnCache.put(cKey, column);
                     int slot = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
@@ -492,18 +489,15 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             int localCx = chunkX & 31;
             int localCz = chunkZ & 31;
             VoxelChunkColumn column = new VoxelChunkColumn(chunkX, chunkZ, minSectionY, maxSectionY);
-            int parsed;
-            synchronized (reader) {
-                parsed = reader.readChunk(localCx, localCz, (sectionY, section) -> {
-                    column.setSection(sectionY, section);
-                    if (section != null && !section.isEmpty()) {
-                        short h = column.getHeightmap().getHighestY();
-                        if (h > highestWorldY) {
-                            highestWorldY = h;
-                        }
+            int parsed = reader.readChunk(localCx, localCz, (sectionY, section) -> {
+                column.setSection(sectionY, section);
+                if (section != null && !section.isEmpty()) {
+                    short h = column.getHeightmap().getHighestY();
+                    if (h > highestWorldY) {
+                        highestWorldY = h;
                     }
-                });
-            }
+                }
+            });
 
             if (parsed > 0) {
                 putColumn(cKey, column);
