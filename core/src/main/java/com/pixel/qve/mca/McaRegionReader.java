@@ -57,6 +57,7 @@ public final class McaRegionReader implements Closeable {
     private final int[] sectorOffsets = new int[1024];
     private final BlockIdRegistry registry;
     private final com.pixel.qve.state.ShapeRegistry shapeRegistry;
+    private volatile long lastHeaderRefreshTime = 0L;
 
     /**
      * Functional callback for consuming parsed chunk sections.
@@ -171,6 +172,11 @@ public final class McaRegionReader implements Closeable {
      * @param forceRemap True to force re-mapping even if file size did not change (critical for Windows NTFS)
      */
     public synchronized void refreshHeaderIfPossible(boolean forceRemap) {
+        long now = System.currentTimeMillis();
+        if (!forceRemap && (now - lastHeaderRefreshTime < 1000L)) {
+            return;
+        }
+        lastHeaderRefreshTime = now;
         try {
             long currentSize = channel.size();
             if (currentSize < 4096) {

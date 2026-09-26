@@ -33,7 +33,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
-    private final Object[] chunkLocks = new Object[256];
+    private final Object[] chunkLocks = new Object[L1_SIZE];
 
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
@@ -474,7 +474,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             }
         }
 
-        int lockIndex = (int) ((cKey ^ (cKey >>> 8) ^ (cKey >>> 16)) & 0xFF);
+        int lockIndex = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
         synchronized (chunkLocks[lockIndex]) {
             if (columnCache.containsKey(cKey)) {
                 return 0;
