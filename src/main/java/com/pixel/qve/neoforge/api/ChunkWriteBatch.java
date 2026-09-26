@@ -728,6 +728,20 @@ public final class ChunkWriteBatch {
         boolean useRegionBatching = com.pixel.qve.neoforge.config.QveConfig.REGION_BATCHING_ENABLED.get();
 
         if (writer != null && useRegionBatching && !pureDiskRegions.isEmpty()) {
+            if (level instanceof ServerLevel sl) {
+                List<Long> cachedKeys = new ArrayList<>();
+                for (Long rKey : pureDiskRegions.keySet()) {
+                    int rx = ChunkPos.getX(rKey);
+                    int rz = ChunkPos.getZ(rKey);
+                    if (MinecraftRegionFileBridge.isRegionCached(sl, rx, rz)) {
+                        cachedKeys.add(rKey);
+                    }
+                }
+                if (!cachedKeys.isEmpty()) {
+                    MinecraftRegionFileBridge.evictAndFlushRegions(sl, cachedKeys);
+                }
+            }
+
             for (Map.Entry<Long, List<ChunkEdits>> entry : pureDiskRegions.entrySet()) {
                 long rKey = entry.getKey();
                 int rx = ChunkPos.getX(rKey);

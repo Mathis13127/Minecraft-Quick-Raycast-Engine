@@ -523,118 +523,93 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         return VoxelDiskWriterThreadPool.submit(() -> {
             List<McaWriteCoordinator.ChunkWriteTask> tasks = new ArrayList<>(editsList.size());
-            List<ChunkWriteContext> contexts = new ArrayList<>(editsList.size());
+            List<IChunkWriteContext> contexts = new ArrayList<>(editsList.size());
             List<ChunkWriteBatch.ChunkEdits> diskEdits = new ArrayList<>(editsList.size());
             List<CompletableFuture<WriteResult>> ramFutures = new ArrayList<>();
 
-            // 1. Evict Minecraft's cached RegionFile handle in background pool to prevent server thread blocking
+            // 1. Evict Minecraft's cached RegionFile handle in background pool to prevent server thread blocking if still cached
             if (level instanceof ServerLevel sl) {
-                MinecraftRegionFileBridge.evictAndFlushRegion(sl, rx, rz);
-            }
-
-            Path mcaFile = (regionDirectory != null) ? regionDirectory.resolve("r." + rx + "." + rz + ".mca") : null;
-            com.pixel.qve.mca.McaRegionReader sharedReader = null;
-            if (mcaFile != null && Files.isRegularFile(mcaFile)) {
-                try {
-                    if (Files.size(mcaFile) >= 8192) {
-                        sharedReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry());
-                    }
-                } catch (Exception e) {
-                    LOGGER.warn("Failed to open shared McaRegionReader for r.{}.{}.mca: {}", rx, rz, e.getMessage());
+                if (MinecraftRegionFileBridge.isRegionCached(sl, rx, rz)) {
+                    MinecraftRegionFileBridge.evictAndFlushRegion(sl, rx, rz);
                 }
             }
 
-            try {
-                for (ChunkWriteBatch.ChunkEdits edits : editsList) {
-                    int cx = edits.getChunkX();
-                    int cz = edits.getChunkZ();
+            for (ChunkWriteBatch.ChunkEdits edits : editsList) {
+                int cx = edits.getChunkX();
+                int cz = edits.getChunkZ();
 
-                    // Late-binding RAM check
-                    if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
-                        if (opts.isStrict()) {
-                            WriteResult err = WriteResult.failure(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, cx, cz,
-                                    "Chunk (" + cx + ", " + cz + ") became resident in RAM");
-                            ramFutures.add(CompletableFuture.completedFuture(err));
-                        } else {
-                            ramFutures.add(applyChunkEditsToRam(edits));
-                        }
-                        continue;
-                    }
-
-                    // Check CreationPolicy
-                    if (opts.shouldFailIfMissing() && !coordinator.hasChunk(cx, cz)) {
-                        WriteResult err = WriteResult.failure(WriteStatus.FAIL_CHUNK_NOT_FOUND, cx, cz,
-                                "Chunk (" + cx + ", " + cz + ") does not exist on disk and FAIL_IF_MISSING policy is active");
+                // Late-binding RAM check
+                if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
+                    if (opts.isStrict()) {
+                        WriteResult err = WriteResult.failure(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, cx, cz,
+                                "Chunk (" + cx + ", " + cz + ") became resident in RAM");
                         ramFutures.add(CompletableFuture.completedFuture(err));
-                        continue;
+                    } else {
+                        ramFutures.add(applyChunkEditsToRam(edits));
                     }
+                    continue;
+                }
 
-                    // Compute required vertical section indices from edits
-                    Set<Integer> requiredSectionYs = new HashSet<>();
+                // Check CreationPolicy
+                if (opts.shouldFailIfMissing() && !coordinator.hasChunk(cx, cz)) {
+                    WriteResult err = WriteResult.failure(WriteStatus.FAIL_CHUNK_NOT_FOUND, cx, cz,
+                            "Chunk (" + cx + ", " + cz + ") does not exist on disk and FAIL_IF_MISSING policy is active");
+                    ramFutures.add(CompletableFuture.completedFuture(err));
+                    continue;
+                }
+
+                // Prepare VoxelMutations and BlockEntities for single-pass in-place patching
+                List<McaWriteCoordinator.VoxelMutation> voxelMutations = null;
+                Map<Long, byte[]> blockEntities = null;
+                if (!edits.getMutations().isEmpty()) {
+                    voxelMutations = new ArrayList<>(edits.getMutations().size());
                     for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                        requiredSectionYs.add(m.worldY() >> 4);
-                    }
-                    // Whole sections don't need pre-loading because they overwrite completely
-                    requiredSectionYs.removeAll(edits.getWholeSections().keySet());
-
-                    ChunkWriteContext context;
-                    try {
-                        context = prepareChunkContext(cx, cz, requiredSectionYs, sharedReader, ctx -> {
-                            for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
-                                ctx.setSection(secEntry.getKey(), secEntry.getValue());
-                            }
-                            for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                                int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
-                                if (m.matchesFilter(curId, null)) {
-                                    ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
-                                    if (m.rawNbt() != null) {
-                                        ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
-                                    }
-                                }
-                            }
-                        });
-                    } catch (Throwable t) {
-                        LOGGER.error("Failed to prepare chunk context for ({}, {}): {}", cx, cz, t.getMessage(), t);
-                        ramFutures.add(CompletableFuture.completedFuture(
-                                WriteResult.failure(WriteStatus.FAIL_IO_ERROR, cx, cz, t.getMessage())
+                        int lx = m.worldX() & 15;
+                        int ly = m.worldY();
+                        int lz = m.worldZ() & 15;
+                        voxelMutations.add(new McaWriteCoordinator.VoxelMutation(
+                                lx, ly, lz, m.targetBlockId(), m.filterBlockId(), m.rawNbt()
                         ));
-                        continue;
+                        if (m.rawNbt() != null) {
+                            if (blockEntities == null) {
+                                blockEntities = new HashMap<>();
+                            }
+                            long key = (((long) (ly & 0xFFFF)) << 8) | (((long) (lz & 0xF)) << 4) | ((long) (lx & 0xF));
+                            blockEntities.put(key, m.rawNbt());
+                        }
                     }
+                }
 
-                    // Fire pre-write event
-                    ChunkPreDirectWriteEvent preEvent = new ChunkPreDirectWriteEvent(level, cx, cz, context);
-                    if (NeoForge.EVENT_BUS.post(preEvent).isCanceled()) {
-                        ramFutures.add(CompletableFuture.completedFuture(
-                                WriteResult.failure(WriteStatus.FAIL_CANCELLED_BY_EVENT, cx, cz, "Cancelled by ChunkPreDirectWriteEvent")
-                        ));
-                        continue;
-                    }
+                int minSec = level.getMinSection();
+                int maxSec = level.getMinSection() + level.getSectionsCount() - 1;
+                BatchChunkWriteContext context = new BatchChunkWriteContext(cx, cz, minSec, maxSec, edits, blockEntities);
 
-                    // Prepare single-pass voxel verification target if mutations present
-                    McaWriteCoordinator.VoxelCheck voxelCheck = null;
-                    if (!edits.getMutations().isEmpty()) {
-                        ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
-                        voxelCheck = new McaWriteCoordinator.VoxelCheck(
-                                firstMut.worldX() & 15,
-                                firstMut.worldY(),
-                                firstMut.worldZ() & 15,
-                                firstMut.targetBlockId()
-                        );
-                    }
-
-                    contexts.add(context);
-                    tasks.add(new McaWriteCoordinator.ChunkWriteTask(
-                            cx, cz, context.getSections(), context.getBlockEntities(), voxelCheck
+                // Fire pre-write event
+                ChunkPreDirectWriteEvent preEvent = new ChunkPreDirectWriteEvent(level, cx, cz, context);
+                if (NeoForge.EVENT_BUS.post(preEvent).isCanceled()) {
+                    ramFutures.add(CompletableFuture.completedFuture(
+                            WriteResult.failure(WriteStatus.FAIL_CANCELLED_BY_EVENT, cx, cz, "Cancelled by ChunkPreDirectWriteEvent")
                     ));
-                    diskEdits.add(edits);
+                    continue;
                 }
-            } finally {
-                if (sharedReader != null) {
-                    try {
-                        sharedReader.close();
-                    } catch (Exception ignored) {
-                    }
+
+                // Prepare single-pass voxel verification target if mutations present
+                McaWriteCoordinator.VoxelCheck voxelCheck = null;
+                if (!edits.getMutations().isEmpty()) {
+                    ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
+                    voxelCheck = new McaWriteCoordinator.VoxelCheck(
+                            firstMut.worldX() & 15,
+                            firstMut.worldY(),
+                            firstMut.worldZ() & 15,
+                            firstMut.targetBlockId()
+                    );
                 }
+
+                contexts.add(context);
+                tasks.add(new McaWriteCoordinator.ChunkWriteTask(
+                        cx, cz, edits.getWholeSections(), voxelMutations, blockEntities, voxelCheck
+                ));
+                diskEdits.add(edits);
             }
 
             if (tasks.isEmpty()) {
@@ -653,7 +628,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
             for (int t = 0; t < metricsList.size(); t++) {
                 McaRegionWriter.WriteMetrics m = metricsList.get(t);
-                ChunkWriteContext ctx = contexts.get(t);
+                IChunkWriteContext ctx = contexts.get(t);
                 ChunkWriteBatch.ChunkEdits edits = diskEdits.get(t);
                 int cx = ctx.getChunkX();
                 int cz = ctx.getChunkZ();

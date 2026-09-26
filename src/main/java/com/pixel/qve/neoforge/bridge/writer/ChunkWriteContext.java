@@ -120,7 +120,7 @@ public class ChunkWriteContext implements IChunkWriteContext {
         setBlockEntityRaw(localX, worldY, localZ, writer.toByteArray());
     }
 
-    private void writeArbitraryData(FastNbtWriter writer, String key, Object val) {
+    static void writeArbitraryData(FastNbtWriter writer, String key, Object val) {
         if (val instanceof Byte b) writer.putByte(key, b);
         else if (val instanceof Short s) writer.putShort(key, s);
         else if (val instanceof Integer i) writer.putInt(key, i);
