@@ -72,13 +72,30 @@ public class QuickVoxelEngineMod {
     }
 
     /**
-     * Checks and resumes any uncompleted voxel write batches preserved from the previous session.
+     * Checks and resumes any uncompleted voxel write batches preserved from the previous session,
+     * and asynchronously pre-heats the terrain generator and JIT pipeline.
      *
      * @param event Server started event
      */
     @SubscribeEvent
     public void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
         com.pixel.qve.neoforge.api.VoxelWriteAPI.checkAndResumeRecovery(event.getServer());
+        if (event.getServer().overworld() != null) {
+            com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.warmupTerrainEngineAsync(event.getServer().overworld());
+        }
+    }
+
+    /**
+     * Pre-warms dimension spatial grids and Anvil storage connections when a level loads.
+     *
+     * @param event Level load event
+     */
+    @SubscribeEvent
+    public void onLevelLoad(LevelEvent.Load event) {
+        LevelAccessor level = event.getLevel();
+        if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            com.pixel.qve.neoforge.warmup.VoxelWarmupEngine.warmupLevel(serverLevel);
+        }
     }
 
     /**

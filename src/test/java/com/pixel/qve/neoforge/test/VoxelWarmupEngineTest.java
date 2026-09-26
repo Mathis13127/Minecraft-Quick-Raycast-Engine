@@ -48,5 +48,20 @@ public class VoxelWarmupEngineTest {
         assertNotNull(asyncFuture);
         VoxelWarmupEngine.WarmupStats asyncStats = asyncFuture.get();
         assertEquals(stats.blockCount(), asyncStats.blockCount());
+
+        // Test terrain warmup null-safety and initial state
+        assertFalse(VoxelWarmupEngine.isTerrainWarm());
+        CompletableFuture<Boolean> nullTerrainFuture = VoxelWarmupEngine.warmupTerrainEngineAsync(null);
+        assertNotNull(nullTerrainFuture);
+        assertFalse(nullTerrainFuture.get());
+        assertFalse(VoxelWarmupEngine.isTerrainWarm());
+
+        // Test level warmup null-safety
+        assertDoesNotThrow(() -> VoxelWarmupEngine.warmupLevel(null));
+
+        // Test reset behavior
+        VoxelWarmupEngine.reset();
+        assertFalse(VoxelWarmupEngine.isWarm());
+        assertFalse(VoxelWarmupEngine.isTerrainWarm());
     }
 }

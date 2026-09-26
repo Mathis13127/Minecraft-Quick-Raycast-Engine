@@ -149,12 +149,14 @@ public final class QveTerrainEngine {
         Objects.requireNonNull(level, "level cannot be null");
         Objects.requireNonNull(virtualChunk, "virtualChunk cannot be null");
 
-        long t0 = System.nanoTime();
+        long enqueuedAt = System.nanoTime();
 
         // 1. Live RAM Stamping: chunk is currently active / loaded
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, targetChunkX, targetChunkZ)) {
             CompletableFuture<WriteResult> future = new CompletableFuture<>();
             level.getServer().execute(() -> {
+                long t0 = System.nanoTime();
+                long queueWaitNs = t0 - enqueuedAt;
                 try {
                     LevelChunk liveChunk = level.getChunk(targetChunkX, targetChunkZ);
                     LevelChunkSection[] srcSecs = virtualChunk.getSections();
@@ -194,9 +196,11 @@ public final class QveTerrainEngine {
                     }
 
                     long duration = System.nanoTime() - t0;
-                    LOGGER.info("[QveTerrainEngine] Stamped virtual chunk ({}, {}) -> live RAM chunk ({}, {}) in {} ms",
+                    LOGGER.info(String.format(
+                            "[QveTerrainEngine] Stamped virtual chunk (%d, %d) -> live RAM chunk (%d, %d) in %.2f ms (server queue delay: %.2f ms)",
                             virtualChunk.getSourceChunkX(), virtualChunk.getSourceChunkZ(),
-                            targetChunkX, targetChunkZ, duration / 1_000_000.0);
+                            targetChunkX, targetChunkZ, duration / 1_000_000.0, queueWaitNs / 1_000_000.0
+                    ));
 
                     future.complete(WriteResult.successRam(targetChunkX, targetChunkZ, duration));
                 } catch (Throwable t) {
@@ -210,6 +214,7 @@ public final class QveTerrainEngine {
 
         // 2. Offline Disk Stamping: chunk is not loaded in RAM
         return CompletableFuture.supplyAsync(() -> {
+            long t0 = System.nanoTime();
             try {
                 ProtoChunk proto = virtualChunk.getProtoChunk();
                 CompoundTag chunkTag = ChunkSerializer.write(level, proto);
