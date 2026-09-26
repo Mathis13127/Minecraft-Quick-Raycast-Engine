@@ -515,6 +515,83 @@ public final class McaWriteCoordinator implements Closeable {
     }
 
     /**
+     * Synchronously writes an uncompressed chunk NBT payload directly to the region file.
+     * Uses atomic snapshot rollbacks and pre-commit coordinate verification.
+     *
+     * @param chunkX                 World chunk X
+     * @param chunkZ                 World chunk Z
+     * @param uncompressedNbtPayload Direct or heap ByteBuffer of uncompressed chunk NBT
+     * @return WriteMetrics detailing sector allocation and compression
+     * @throws IOException If write or compression fails
+     */
+    public McaRegionWriter.WriteMetrics writeRawChunkNbtSync(int chunkX, int chunkZ, java.nio.ByteBuffer uncompressedNbtPayload) throws IOException {
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        int localX = chunkX & 31;
+        int localZ = chunkZ & 31;
+        int localIndex = localX + localZ * 32;
+
+        ReentrantLock lock = getRegionLock(rx, rz);
+        lock.lock();
+        try {
+            McaRegionWriter writer = getOrOpenWriter(rx, rz);
+            SectorAllocator.Snapshot snapshot = writer.snapshotAllocator();
+            byte[] oldRaw = writer.readChunkRaw(localIndex);
+
+            try {
+                long startTime = System.nanoTime();
+
+                // 1. Compress and write payload to region file (defer header sync)
+                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressedNbtPayload, false);
+
+                // 2. Pre-commit coordinate verification
+                java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
+                if (verifyPayload == null) {
+                    throw new IOException("Pre-commit verification failed: chunk (" + chunkX + ", " + chunkZ + ") cannot be read back");
+                }
+                if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, chunkX, chunkZ)) {
+                    throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + chunkX + ", " + chunkZ + ")");
+                }
+                metrics = metrics.withVerified(true);
+
+                // 3. Commit header
+                writer.syncHeaderOnly();
+                writer.flush(false);
+
+                // 4. Notify listeners
+                long duration = System.nanoTime() - startTime;
+                for (IChunkWriteListener listener : listeners) {
+                    try {
+                        listener.onChunkWritten(chunkX, chunkZ, duration, metrics);
+                    } catch (Throwable t) {
+                        LOGGER.log(System.Logger.Level.WARNING, "Error in chunk write listener: {0}", t.getMessage());
+                    }
+                }
+
+                return metrics;
+            } catch (Throwable t) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "Raw chunk write failed for ({0}, {1}) in region r.{2}.{3}.mca, rolling back: {4}",
+                        chunkX, chunkZ, rx, rz, t.getMessage());
+                try {
+                    Map<Integer, byte[]> rollbackMap = new HashMap<>();
+                    if (oldRaw != null) {
+                        rollbackMap.put(localIndex, oldRaw);
+                    }
+                    writer.rollback(snapshot, rollbackMap);
+                } catch (Throwable rbEx) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "Critical: Rollback failed for region r.{0}.{1}.mca: {2}", rx, rz, rbEx.getMessage());
+                    t.addSuppressed(rbEx);
+                }
+                throw (t instanceof IOException ioe) ? ioe : new IOException("Raw chunk write failed and was rolled back", t);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Surgically verifies whether a single voxel physically written to disk matches the expected block ID,
      * reusing open region writers and zero-allocation decompression buffers.
      *

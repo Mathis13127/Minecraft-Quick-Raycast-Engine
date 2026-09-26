@@ -58,6 +58,15 @@ public final class RaycastThreadPool {
     private RaycastThreadPool() {}
 
     /**
+     * Gets the backing ExecutorService for async task scheduling.
+     *
+     * @return ExecutorService instance
+     */
+    public static ExecutorService getExecutor() {
+        return EXECUTOR;
+    }
+
+    /**
      * Retrieves the reusable RaycastContext for the calling worker thread.
      *
      * @return Thread-local RaycastContext instance
