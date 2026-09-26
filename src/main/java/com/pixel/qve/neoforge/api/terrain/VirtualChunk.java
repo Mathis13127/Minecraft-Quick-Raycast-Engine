@@ -78,4 +78,15 @@ public interface VirtualChunk {
      * @return CompletableFuture completing with WriteResult
      */
     CompletableFuture<WriteResult> stampInto(ServerLevel level, int targetChunkX, int targetChunkZ);
+
+    /**
+     * Returns the generation duration in nanoseconds for this virtual chunk.
+     * If served from cache, returns 0.
+     */
+    long getGenerationDurationNanos();
+
+    /**
+     * Returns true if this virtual chunk was retrieved from the in-memory LRU cache.
+     */
+    boolean isFromCache();
 }

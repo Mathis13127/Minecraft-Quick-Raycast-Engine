@@ -185,6 +185,7 @@ public final class QveTerrainCommand {
         }
 
         boolean liveRam = level.isLoaded(new BlockPos(dstChunkX << 4, 64, dstChunkZ << 4));
+        long commandStartNs = System.nanoTime();
 
         source.sendSuccess(() -> Component.literal(String.format(
                 "§7[QVE Terrain] Stamping virtual chunk §e(%d, %d) §7-> target §f(%d, %d) §7[%s] at stage §e[%s]§7...",
@@ -194,23 +195,35 @@ public final class QveTerrainCommand {
         )), false);
 
         QveTerrainEngine.generateVirtualChunkAsync(level, srcChunkX, srcChunkZ, stage)
-                .thenCompose(vc -> QveTerrainEngine.stampVirtualChunkAsync(level, vc, dstChunkX, dstChunkZ))
-                .thenAccept(res -> {
+                .thenCompose(vc -> {
+                    double genMs = vc.getGenerationDurationNanos() / 1_000_000.0;
+                    boolean fromCache = vc.isFromCache();
+                    return QveTerrainEngine.stampVirtualChunkAsync(level, vc, dstChunkX, dstChunkZ)
+                            .thenApply(res -> new StampingSummary(vc, res, genMs, fromCache));
+                })
+                .thenAccept(summary -> {
                     level.getServer().execute(() -> {
+                        long totalNs = System.nanoTime() - commandStartNs;
+                        double totalMs = totalNs / 1_000_000.0;
+                        var res = summary.writeResult();
                         if (res.isSuccess()) {
-                            double ms = res.durationNanos() / 1_000_000.0;
+                            double stampMs = res.durationNanos() / 1_000_000.0;
+                            double genMs = summary.genMs();
+                            String cacheTag = summary.fromCache() ? "§a[CACHE HIT]" : "§e[WORLDGEN]";
                             String modeStr = (res.status() == com.pixel.qve.neoforge.api.WriteStatus.SUCCESS_RAM)
                                     ? "§aLive RAM (Packet Synced)"
                                     : "§bAnvil MCA Disk";
 
                             source.sendSuccess(() -> Component.literal(String.format(
                                     "§a=== [Quick Voxel Engine: Virtual Chunk STAMP SUCCESS] ===\n" +
-                                    "§7Source Seed Chunk: §e(%d, %d) §8| §7Stage: §e%s\n" +
+                                    "§7Source Seed Chunk: §e(%d, %d) §8| §7Stage: §e%s %s\n" +
                                     "§7Destination Chunk: §f(%d, %d) §8| §7Target: %s\n" +
-                                    "§7Duration: §f%.2f ms §8| §7Status: §a%s",
-                                    srcChunkX, srcChunkZ, stage.getName(),
+                                    "§7Total Duration: §f%.2f ms §7(Gen: §b%.2f ms §7| Stamp: §e%.2f ms§7)\n" +
+                                    "§7Status: §a%s",
+                                    srcChunkX, srcChunkZ, stage.getName(), cacheTag,
                                     dstChunkX, dstChunkZ, modeStr,
-                                    ms, res.status()
+                                    totalMs, genMs, stampMs,
+                                    res.status()
                             )), true);
                         } else {
                             source.sendFailure(Component.literal(String.format(
@@ -223,6 +236,13 @@ public final class QveTerrainCommand {
 
         return 1;
     }
+
+    private record StampingSummary(
+            com.pixel.qve.neoforge.api.terrain.VirtualChunk virtualChunk,
+            com.pixel.qve.neoforge.api.WriteResult writeResult,
+            double genMs,
+            boolean fromCache
+    ) {}
 
     private static int executeSample(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();

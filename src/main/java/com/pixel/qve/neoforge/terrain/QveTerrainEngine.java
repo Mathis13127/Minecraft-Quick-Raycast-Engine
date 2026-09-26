@@ -70,6 +70,16 @@ public final class QveTerrainEngine {
         Objects.requireNonNull(level, "level cannot be null");
         Objects.requireNonNull(stage, "stage cannot be null");
 
+        // Check LRU cache first
+        VirtualChunk cached = VirtualChunkCache.get(chunkX, chunkZ, stage);
+        if (cached instanceof DefaultVirtualChunk dvc) {
+            LOGGER.debug("[QveTerrainEngine] Virtual chunk ({}, {}) at stage [{}] served from LRU cache (0 ms)",
+                    chunkX, chunkZ, stage.getName());
+            return CompletableFuture.completedFuture(dvc.asCachedCopy());
+        } else if (cached != null) {
+            return CompletableFuture.completedFuture(cached);
+        }
+
         return CompletableFuture.supplyAsync(() -> {
             long t0 = System.nanoTime();
             ServerChunkCache chunkSource = level.getChunkSource();
@@ -122,7 +132,9 @@ public final class QveTerrainEngine {
             LOGGER.debug("[QveTerrainEngine] Generated virtual chunk ({}, {}) at stage [{}] in {} ms",
                     chunkX, chunkZ, stage.getName(), duration / 1_000_000.0);
 
-            return new DefaultVirtualChunk(chunkX, chunkZ, stage, protoChunk);
+            DefaultVirtualChunk generated = new DefaultVirtualChunk(chunkX, chunkZ, stage, protoChunk, duration, false);
+            VirtualChunkCache.put(chunkX, chunkZ, stage, generated);
+            return generated;
         }, RaycastThreadPool.getExecutor());
     }
 

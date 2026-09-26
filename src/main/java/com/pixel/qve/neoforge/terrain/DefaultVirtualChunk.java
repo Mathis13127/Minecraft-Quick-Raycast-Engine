@@ -22,12 +22,28 @@ public final class DefaultVirtualChunk implements VirtualChunk {
     private final int sourceChunkZ;
     private final TerrainStage stage;
     private final ProtoChunk protoChunk;
+    private final long generationDurationNanos;
+    private final boolean fromCache;
 
     public DefaultVirtualChunk(int sourceChunkX, int sourceChunkZ, TerrainStage stage, ProtoChunk protoChunk) {
+        this(sourceChunkX, sourceChunkZ, stage, protoChunk, 0L, false);
+    }
+
+    public DefaultVirtualChunk(int sourceChunkX, int sourceChunkZ, TerrainStage stage, ProtoChunk protoChunk,
+                               long generationDurationNanos, boolean fromCache) {
         this.sourceChunkX = sourceChunkX;
         this.sourceChunkZ = sourceChunkZ;
         this.stage = Objects.requireNonNull(stage, "stage cannot be null");
         this.protoChunk = Objects.requireNonNull(protoChunk, "protoChunk cannot be null");
+        this.generationDurationNanos = generationDurationNanos;
+        this.fromCache = fromCache;
+    }
+
+    /**
+     * Returns a copy of this virtual chunk marked as retrieved from the LRU cache.
+     */
+    public DefaultVirtualChunk asCachedCopy() {
+        return new DefaultVirtualChunk(sourceChunkX, sourceChunkZ, stage, protoChunk, 0L, true);
     }
 
     @Override
@@ -84,5 +100,15 @@ public final class DefaultVirtualChunk implements VirtualChunk {
     @Override
     public CompletableFuture<WriteResult> stampInto(ServerLevel level, int targetChunkX, int targetChunkZ) {
         return QveTerrainEngine.stampVirtualChunkAsync(level, this, targetChunkX, targetChunkZ);
+    }
+
+    @Override
+    public long getGenerationDurationNanos() {
+        return generationDurationNanos;
+    }
+
+    @Override
+    public boolean isFromCache() {
+        return fromCache;
     }
 }
