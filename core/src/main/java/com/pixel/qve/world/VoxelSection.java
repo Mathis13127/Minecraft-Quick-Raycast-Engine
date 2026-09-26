@@ -215,6 +215,20 @@ public final class VoxelSection {
     }
 
     /**
+     * Convenience method to set block ID, automatically setting solid flag if not air.
+     */
+    public void setBlock(int x, int y, int z, int blockId) {
+        setVoxel(x, y, z, blockId != BlockIdRegistry.AIR_ID, blockId);
+    }
+
+    /**
+     * Alias for setBlock.
+     */
+    public void set(int x, int y, int z, int blockId) {
+        setBlock(x, y, z, blockId);
+    }
+
+    /**
      * Checks if this section contains zero solid voxels.
      *
      * @return True if completely empty

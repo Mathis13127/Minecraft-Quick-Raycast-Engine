@@ -135,17 +135,31 @@ public final class McaWriteCoordinator implements Closeable {
     public record VoxelCheck(int localX, int worldY, int localZ, int expectedBlockId) {}
 
     /**
+     * Primitive descriptor representing a block mutation within a chunk without NeoForge/Minecraft object overhead.
+     */
+    public record VoxelMutation(int localX, int worldY, int localZ, int targetBlockId, int filterBlockId, byte[] rawNbt) {
+        public boolean matchesFilter(int currentBlockId) {
+            return filterBlockId < 0 || currentBlockId == filterBlockId;
+        }
+    }
+
+    /**
      * Payload descriptor representing a chunk ready for serializing and writing to disk.
      */
     public record ChunkWriteTask(
             int chunkX,
             int chunkZ,
             Map<Integer, VoxelSection> sections,
+            List<VoxelMutation> mutations,
             Map<Long, byte[]> blockEntities,
             VoxelCheck voxelCheck
     ) {
         public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, Map<Long, byte[]> blockEntities) {
-            this(chunkX, chunkZ, sections, blockEntities, null);
+            this(chunkX, chunkZ, sections, List.of(), blockEntities, null);
+        }
+
+        public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, Map<Long, byte[]> blockEntities, VoxelCheck voxelCheck) {
+            this(chunkX, chunkZ, sections, List.of(), blockEntities, voxelCheck);
         }
     }
 
@@ -181,13 +195,7 @@ public final class McaWriteCoordinator implements Closeable {
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
             SectorAllocator.Snapshot snapshot = writer.snapshotAllocator();
-            Map<Integer, byte[]> rollbackPayloads = new HashMap<>();
-            for (ChunkWriteTask task : chunks) {
-                int localX = task.chunkX() & 31;
-                int localZ = task.chunkZ() & 31;
-                int localIndex = localX + localZ * 32;
-                rollbackPayloads.putIfAbsent(localIndex, writer.readChunkRaw(localIndex));
-            }
+            Map<Integer, byte[]> rollbackPayloads = null;
 
             List<McaRegionWriter.WriteMetrics> metricsList = new ArrayList<>(chunks.size());
 
@@ -212,6 +220,7 @@ public final class McaWriteCoordinator implements Closeable {
                                         minSectionY, maxSectionY,
                                         registry,
                                         task.sections(),
+                                        task.mutations(),
                                         task.blockEntities(),
                                         nbtWriter
                                 );
@@ -225,7 +234,19 @@ public final class McaWriteCoordinator implements Closeable {
                         }
                     }
                     if (!patched) {
-                        FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
+                        Map<Integer, VoxelSection> effectiveSections = task.sections();
+                        if (task.mutations() != null && !task.mutations().isEmpty()) {
+                            effectiveSections = (effectiveSections != null) ? new HashMap<>(effectiveSections) : new HashMap<>();
+                            for (VoxelMutation m : task.mutations()) {
+                                int secY = m.worldY() >> 4;
+                                VoxelSection sec = effectiveSections.computeIfAbsent(secY, k -> new VoxelSection());
+                                int lx = m.localX() & 15;
+                                int ly = m.worldY() & 15;
+                                int lz = m.localZ() & 15;
+                                sec.set(lx, ly, lz, m.targetBlockId());
+                            }
+                        }
+                        FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, effectiveSections, task.blockEntities());
                     }
 
                     // 2. Write payload to sector, deferring header sync
@@ -243,9 +264,8 @@ public final class McaWriteCoordinator implements Closeable {
                     }
                 }
 
-                // 4. Commit: sync 8KB header and flush
+                // 4. Commit: sync 8KB header (which flushes the channel force(false))
                 writer.syncHeaderOnly();
-                writer.flush(false);
 
                 // 5. Verification: synchronous or deferred to AsyncChunkIntegrityVerifier
                 if (synchronousVerification) {

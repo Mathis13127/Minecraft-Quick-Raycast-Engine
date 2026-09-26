@@ -35,6 +35,34 @@ public final class MinecraftRegionFileBridge {
     private MinecraftRegionFileBridge() {}
 
     /**
+     * Checks if Minecraft's RegionFileStorage currently has a cached open handle for region (rx, rz).
+     * Fast check that inspects the cache map directly.
+     *
+     * @param serverLevel Minecraft ServerLevel
+     * @param rx          Region X coordinate
+     * @param rz          Region Z coordinate
+     * @return True if region handle is cached in memory
+     */
+    public static boolean isRegionCached(ServerLevel serverLevel, int rx, int rz) {
+        if (serverLevel == null) return false;
+        try {
+            ChunkMap chunkMap = serverLevel.getChunkSource().chunkMap;
+            if (chunkMap == null) return false;
+            IOWorker worker = ((ChunkStorageAccessor) chunkMap).qve$getWorker();
+            if (worker == null) return false;
+            RegionFileStorage storage = ((IOWorkerAccessor) worker).qve$getStorage();
+            if (storage == null) return false;
+            Long2ObjectLinkedOpenHashMap<RegionFile> cache = ((RegionFileStorageAccessor) (Object) storage).qve$getRegionCache();
+            if (cache == null) return false;
+            synchronized (cache) {
+                return cache.containsKey(ChunkPos.asLong(rx, rz));
+            }
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
      * Synchronizes all pending writes in Minecraft's {@link IOWorker}, then closes and evicts the cached
      * {@link RegionFile} for region (rx, rz) from Minecraft's {@link RegionFileStorage}.
      *
