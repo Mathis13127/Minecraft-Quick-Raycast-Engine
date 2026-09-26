@@ -39,13 +39,17 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
     private final int maxCachedColumns;
 
     private final Map<Long, VoxelChunkColumn> columns = new ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentLinkedDeque<Long> columnEvictionQueue = new java.util.concurrent.ConcurrentLinkedDeque<>();
     private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
-    private static final int L1_SIZE = 16384;
+    private static final int L1_SIZE = 65536;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
     private volatile short highestWorldY = Short.MIN_VALUE;
+
+    private final long[] evictionRing;
+    private final int evictionMask;
+    private final java.util.concurrent.atomic.AtomicInteger evictionWrite = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicInteger evictionRead = new java.util.concurrent.atomic.AtomicInteger(0);
 
     /**
      * Constructs a UnifiedVoxelCache using the given block ID registry with default shape registry and bounds.
@@ -123,6 +127,12 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
         this.minSectionY = minSectionY;
         this.maxSectionY = maxSectionY;
         this.maxCachedColumns = Math.max(16, maxCachedColumns);
+        int ringCap = 1;
+        while (ringCap < this.maxCachedColumns * 2) {
+            ringCap <<= 1;
+        }
+        this.evictionRing = new long[ringCap];
+        this.evictionMask = ringCap - 1;
     }
 
     /**
@@ -202,13 +212,18 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
         if (previous != null) {
             return previous;
         }
-        columnEvictionQueue.offer(cKey);
+        int w = evictionWrite.getAndIncrement() & evictionMask;
+        evictionRing[w] = cKey;
         while (columns.size() > maxCachedColumns) {
-            Long oldest = columnEvictionQueue.poll();
-            if (oldest != null) {
-                columns.remove(oldest);
-            } else {
+            int r = evictionRead.get();
+            if (r == evictionWrite.get()) {
                 break;
+            }
+            if (evictionRead.compareAndSet(r, r + 1)) {
+                long oldest = evictionRing[r & evictionMask];
+                if (oldest != 0L) {
+                    columns.remove(oldest);
+                }
             }
         }
         return newCol;
@@ -513,7 +528,9 @@ public class UnifiedVoxelCache implements IVoxelGrid, IVoxelWorld, AutoCloseable
      */
     public void clear() {
         columns.clear();
-        columnEvictionQueue.clear();
+        evictionWrite.set(0);
+        evictionRead.set(0);
+        java.util.Arrays.fill(evictionRing, 0L);
         java.util.Arrays.fill(l1Keys, 0L);
         java.util.Arrays.fill(l1Columns, null);
         highestWorldY = Short.MIN_VALUE;

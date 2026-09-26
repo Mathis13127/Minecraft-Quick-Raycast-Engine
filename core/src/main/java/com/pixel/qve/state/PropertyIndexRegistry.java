@@ -54,8 +54,12 @@ public final class PropertyIndexRegistry {
     private final short[] l1ValIds = new short[L1_VAL_SIZE];
     private final long[] l1ValOccupied = new long[L1_VAL_SIZE / 64];
 
-    // Block ID to packed property pairs ((keyId << 16) | valId)
-    private volatile int[][] blockProperties = new int[INITIAL_BLOCK_CAPACITY][];
+    // Struct-of-Arrays flat primitive layout for block properties
+    // blockPropSpans: 64 bits per block ID -> ((long) offset << 32) | (count & 0xFFFFFFFFL)
+    // 0L means no properties registered for this block
+    private volatile long[] blockPropSpans = new long[INITIAL_BLOCK_CAPACITY];
+    private volatile int[] flatPackedProperties = new int[INITIAL_BLOCK_CAPACITY * 2];
+    private volatile int flatPropertiesSize = 0;
 
     /**
      * Constructs a new PropertyIndexRegistry initialized with fast L1 hash caches.
@@ -285,7 +289,7 @@ public final class PropertyIndexRegistry {
         ensureBlockCapacity(index + 1);
 
         if (pairs == null || pairs.length == 0) {
-            blockProperties[index] = null;
+            blockPropSpans[index] = 0L;
             return;
         }
 
@@ -296,7 +300,7 @@ public final class PropertyIndexRegistry {
             int v = pairs[i * 2 + 1] & 0xFFFF;
             packed[i] = (k << 16) | v;
         }
-        blockProperties[index] = packed;
+        storePackedProperties(index, packed);
     }
 
     /**
@@ -309,7 +313,35 @@ public final class PropertyIndexRegistry {
         if (blockId <= 0) return;
         int index = blockId;
         ensureBlockCapacity(index + 1);
-        blockProperties[index] = packedPairs;
+        if (packedPairs == null || packedPairs.length == 0) {
+            blockPropSpans[index] = 0L;
+            return;
+        }
+        storePackedProperties(index, packedPairs);
+    }
+
+    private void storePackedProperties(int index, int[] packed) {
+        int count = packed.length;
+        long existingSpan = blockPropSpans[index];
+        int offset;
+        if (existingSpan != 0L && (int) existingSpan == count) {
+            // Overwrite in place at existing offset
+            offset = (int) (existingSpan >>> 32);
+        } else {
+            // Append at the end of flat buffer
+            offset = flatPropertiesSize;
+            ensureFlatCapacity(offset + count);
+            flatPropertiesSize += count;
+        }
+        System.arraycopy(packed, 0, flatPackedProperties, offset, count);
+        blockPropSpans[index] = (((long) offset) << 32) | ((long) count & 0xFFFFFFFFL);
+    }
+
+    private void ensureFlatCapacity(int minCapacity) {
+        if (minCapacity > flatPackedProperties.length) {
+            int newCap = Math.max(flatPackedProperties.length * 2, minCapacity + 256);
+            this.flatPackedProperties = Arrays.copyOf(flatPackedProperties, newCap);
+        }
     }
 
     /**
@@ -320,8 +352,19 @@ public final class PropertyIndexRegistry {
      */
     public int[] getBlockPropertiesPacked(int blockId) {
         int index = blockId;
-        int[][] props = this.blockProperties;
-        return (index >= 0 && index < props.length) ? props[index] : null;
+        long[] spans = this.blockPropSpans;
+        if (index < 0 || index >= spans.length) {
+            return null;
+        }
+        long span = spans[index];
+        if (span == 0L) {
+            return null;
+        }
+        int offset = (int) (span >>> 32);
+        int count = (int) span;
+        int[] result = new int[count];
+        System.arraycopy(this.flatPackedProperties, offset, result, 0, count);
+        return result;
     }
 
     /**
@@ -334,17 +377,23 @@ public final class PropertyIndexRegistry {
      */
     public short getPropertyValue(int blockId, short keyId) {
         int index = blockId;
-        int[][] props = this.blockProperties;
-        if (index < 0 || index >= props.length) {
+        long[] spans = this.blockPropSpans;
+        if (index < 0 || index >= spans.length) {
             return NO_VALUE;
         }
-        int[] pairs = props[index];
-        if (pairs == null) {
+        long span = spans[index];
+        if (span == 0L) {
             return NO_VALUE;
         }
 
+        int offset = (int) (span >>> 32);
+        int count = (int) span;
+        int[] flat = this.flatPackedProperties;
         int targetKey = keyId & 0xFFFF;
-        for (int p : pairs) {
+        int end = offset + count;
+
+        for (int i = offset; i < end; i++) {
+            int p = flat[i];
             if ((p >>> 16) == targetKey) {
                 return (short) (p & 0xFFFF);
             }
@@ -385,17 +434,27 @@ public final class PropertyIndexRegistry {
      * @return Formatted string, or empty string if no properties
      */
     public String formatProperties(int blockId) {
-        int[] packed = getBlockPropertiesPacked(blockId);
-        if (packed == null || packed.length == 0) {
+        int index = blockId;
+        long[] spans = this.blockPropSpans;
+        if (index < 0 || index >= spans.length) {
+            return "";
+        }
+        long span = spans[index];
+        if (span == 0L) {
             return "";
         }
 
+        int offset = (int) (span >>> 32);
+        int count = (int) span;
+        int[] flat = this.flatPackedProperties;
+
         StringBuilder sb = new StringBuilder();
         sb.append("[");
-        for (int i = 0; i < packed.length; i++) {
+        for (int i = 0; i < count; i++) {
             if (i > 0) sb.append(",");
-            short k = (short) (packed[i] >>> 16);
-            short v = (short) (packed[i] & 0xFFFF);
+            int p = flat[offset + i];
+            short k = (short) (p >>> 16);
+            short v = (short) (p & 0xFFFF);
             sb.append(getKeyName(k)).append("=").append(getValueName(k, v));
         }
         sb.append("]");
@@ -413,9 +472,9 @@ public final class PropertyIndexRegistry {
     }
 
     private void ensureBlockCapacity(int minCapacity) {
-        if (minCapacity > blockProperties.length) {
-            int newCap = Math.max(blockProperties.length * 2, minCapacity);
-            this.blockProperties = Arrays.copyOf(blockProperties, newCap);
+        if (minCapacity > blockPropSpans.length) {
+            int newCap = Math.max(blockPropSpans.length * 2, minCapacity);
+            this.blockPropSpans = Arrays.copyOf(blockPropSpans, newCap);
         }
     }
 
@@ -440,6 +499,8 @@ public final class PropertyIndexRegistry {
         Arrays.fill(l1ValIds, NO_VALUE);
         Arrays.fill(l1ValOccupied, 0L);
 
-        Arrays.fill(blockProperties, null);
+        Arrays.fill(blockPropSpans, 0L);
+        Arrays.fill(flatPackedProperties, 0);
+        flatPropertiesSize = 0;
     }
 }

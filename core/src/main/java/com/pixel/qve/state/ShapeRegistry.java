@@ -13,18 +13,18 @@ public final class ShapeRegistry {
 
     private static final int INITIAL_CAPACITY = 256;
     private volatile VoxelShape[] shapes;
-    private volatile boolean[] isFullCube;
+    private volatile long[] isFullCubeBits;
 
     /**
      * Constructs a ShapeRegistry initialized to full cubes, with air reserved as empty.
      */
     public ShapeRegistry() {
         this.shapes = new VoxelShape[INITIAL_CAPACITY];
-        this.isFullCube = new boolean[INITIAL_CAPACITY];
+        this.isFullCubeBits = new long[(INITIAL_CAPACITY + 63) / 64];
         Arrays.fill(shapes, VoxelShape.FULL_CUBE);
-        Arrays.fill(isFullCube, true);
+        Arrays.fill(isFullCubeBits, ~0L);
         shapes[BlockIdRegistry.AIR_ID] = VoxelShape.EMPTY;
-        isFullCube[BlockIdRegistry.AIR_ID] = false;
+        isFullCubeBits[BlockIdRegistry.AIR_ID >>> 6] &= ~(1L << (BlockIdRegistry.AIR_ID & 63));
     }
 
     /**
@@ -39,7 +39,13 @@ public final class ShapeRegistry {
         int index = blockId;
         ensureCapacity(index + 1);
         shapes[index] = shape;
-        isFullCube[index] = shape.isFullCube();
+        int word = index >>> 6;
+        long bit = 1L << (index & 63);
+        if (shape.isFullCube()) {
+            isFullCubeBits[word] |= bit;
+        } else {
+            isFullCubeBits[word] &= ~bit;
+        }
     }
 
     /**
@@ -54,9 +60,10 @@ public final class ShapeRegistry {
             return false;
         }
         int index = blockId;
-        boolean[] local = this.isFullCube;
-        if (index >= 0 && index < local.length) {
-            return local[index];
+        long[] local = this.isFullCubeBits;
+        int word = index >>> 6;
+        if (word >= 0 && word < local.length) {
+            return (local[word] & (1L << (index & 63))) != 0L;
         }
         return true; // Unmapped blocks default to full cube
     }
@@ -132,14 +139,18 @@ public final class ShapeRegistry {
         if (minCapacity > shapes.length) {
             int newCap = Math.max(shapes.length * 2, minCapacity);
             VoxelShape[] newShapes = Arrays.copyOf(shapes, newCap);
-            boolean[] newFullCube = Arrays.copyOf(isFullCube, newCap);
-            // Default new entries to FULL_CUBE
+            int newWords = (newCap + 63) / 64;
+            long[] newFullCubeBits = Arrays.copyOf(isFullCubeBits, newWords);
+            // Default new entries to FULL_CUBE (all bits set to 1)
+            int oldWords = isFullCubeBits.length;
+            if (newWords > oldWords) {
+                Arrays.fill(newFullCubeBits, oldWords, newWords, ~0L);
+            }
             for (int i = shapes.length; i < newCap; i++) {
                 newShapes[i] = VoxelShape.FULL_CUBE;
-                newFullCube[i] = true;
             }
             this.shapes = newShapes;
-            this.isFullCube = newFullCube;
+            this.isFullCubeBits = newFullCubeBits;
         }
     }
 }

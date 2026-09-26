@@ -47,6 +47,8 @@ public final class McaRegionReader implements Closeable {
 
     private static final ThreadLocal<Inflater> INFLATER_CACHE = ThreadLocal.withInitial(() -> new Inflater(false));
     private static final ThreadLocal<ByteBuffer> DECOMPRESS_BUFFER = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(1024 * 1024));
+    private static final ThreadLocal<int[]> PALETTE_REUSE_BUF = ThreadLocal.withInitial(() -> new int[256]);
+    private static final ThreadLocal<long[]> DATA_REUSE_BUF = ThreadLocal.withInitial(() -> new long[4096]);
 
     private final Path filePath;
     private final RandomAccessFile raf;
@@ -303,7 +305,9 @@ public final class McaRegionReader implements Closeable {
     private int parseSection(ByteBuffer buf, java.util.function.IntPredicate sectionFilter, ChunkSectionConsumer consumer) {
         int sectionY = Integer.MIN_VALUE;
         int[] paletteIds = null;
+        int paletteCount = 0;
         long[] data = null;
+        int dataCount = 0;
 
         while (true) {
             byte childType = buf.get();
@@ -338,16 +342,20 @@ public final class McaRegionReader implements Closeable {
                     if (FastNbtReader.matches(buf, bsNamePos, bsNameLen, PALETTE_NAME) && bsType == FastNbtReader.TAG_LIST) {
                         buf.get(); // elemType (10)
                         int pCount = buf.getInt();
-                        if (pCount == 1) {
-                            paletteIds = new int[] { parsePaletteEntry(buf) };
-                        } else {
-                            paletteIds = new int[pCount];
-                            for (int pi = 0; pi < pCount; pi++) {
-                                paletteIds[pi] = parsePaletteEntry(buf);
-                            }
+                        paletteCount = pCount;
+                        int[] pBuf = PALETTE_REUSE_BUF.get();
+                        if (pCount > pBuf.length) {
+                            pBuf = new int[Math.max(pBuf.length * 2, pCount + 64)];
+                            PALETTE_REUSE_BUF.set(pBuf);
                         }
+                        for (int pi = 0; pi < pCount; pi++) {
+                            pBuf[pi] = parsePaletteEntry(buf);
+                        }
+                        paletteIds = pBuf;
                     } else if (FastNbtReader.matches(buf, bsNamePos, bsNameLen, DATA_NAME) && bsType == FastNbtReader.TAG_LONG_ARRAY) {
-                        data = FastNbtReader.readLongArray(buf);
+                        long[] dBuf = DATA_REUSE_BUF.get();
+                        dataCount = FastNbtReader.readLongArrayInto(buf, dBuf);
+                        data = dBuf;
                     } else {
                         FastNbtReader.skipTagPayload(buf, bsType);
                     }
@@ -362,11 +370,11 @@ public final class McaRegionReader implements Closeable {
         }
 
         if (sectionY != Integer.MIN_VALUE && paletteIds != null) {
-            if (paletteIds.length == 1 && paletteIds[0] == BlockIdRegistry.AIR_ID) {
+            if (paletteCount == 1 && paletteIds[0] == BlockIdRegistry.AIR_ID) {
                 consumer.accept(sectionY, VoxelSection.EMPTY);
                 return 1;
             }
-            VoxelSection section = BlockStatePaletteUnpacker.unpackDirect(paletteIds, data, shapeRegistry);
+            VoxelSection section = BlockStatePaletteUnpacker.unpackDirect(paletteIds, paletteCount, data, dataCount, shapeRegistry);
             consumer.accept(sectionY, section);
             return 1;
         } else if (sectionY != Integer.MIN_VALUE && data != null && paletteIds == null) {

@@ -20,6 +20,9 @@ import com.pixel.qve.world.VoxelSection;
  */
 public final class VoxelDDA {
 
+    private static final ThreadLocal<com.pixel.qve.state.SubBox.SubBoxHit> THREAD_LOCAL_SUB_HIT =
+            ThreadLocal.withInitial(com.pixel.qve.state.SubBox.SubBoxHit::new);
+
     private VoxelDDA() {}
 
     /**
@@ -67,7 +70,8 @@ public final class VoxelDDA {
             VoxelSection sec0 = grid.getSection(x0 >> 4, y0 >> 4, z0 >> 4);
             if (sec0 != null && !sec0.isEmpty() && sec0.isSolid(x0 & 15, y0 & 15, z0 & 15)) {
                 int blockId = sec0.getBlockId(x0 & 15, y0 & 15, z0 & 15);
-                com.pixel.qve.state.SubBox.SubBoxHit subHit0 = new com.pixel.qve.state.SubBox.SubBoxHit();
+                com.pixel.qve.state.SubBox.SubBoxHit subHit0 = THREAD_LOCAL_SUB_HIT.get();
+                subHit0.reset();
                 return evaluateVoxelHit(startX, startY, startZ, 0, 0, 0, x0, y0, z0, 0.0, 0.0, VoxelFace.NONE, blockId, grid, subHit0, result);
             }
             return false;
@@ -213,7 +217,8 @@ public final class VoxelDDA {
 
         double t = 0.0;
         VoxelFace lastFace = VoxelFace.NONE;
-        com.pixel.qve.state.SubBox.SubBoxHit subHit = new com.pixel.qve.state.SubBox.SubBoxHit();
+        com.pixel.qve.state.SubBox.SubBoxHit subHit = THREAD_LOCAL_SUB_HIT.get();
+        subHit.reset();
 
         // Chunk tracking registers across horizontal traversal
         com.pixel.qve.world.Heightmap2D currentHm = (currentColumn != null) ? currentColumn.getHeightmap() : grid.getHeightmap(currentChunkX, currentChunkZ);

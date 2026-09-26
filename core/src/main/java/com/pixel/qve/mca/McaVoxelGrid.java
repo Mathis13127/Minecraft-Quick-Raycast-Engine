@@ -29,7 +29,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private final BlockIdRegistry registry;
     private final OnDemandNbtFetcher nbtFetcher;
     private final Map<Long, VoxelChunkColumn> columnCache = new ConcurrentHashMap<>();
-    private static final int L1_SIZE = 16384;
+    private static final int L1_SIZE = 65536;
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];

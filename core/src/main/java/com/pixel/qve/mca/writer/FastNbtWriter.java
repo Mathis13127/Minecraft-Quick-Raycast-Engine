@@ -413,16 +413,60 @@ public final class FastNbtWriter {
     }
 
     // ==========================================
-    // Internal Helpers
+    // Internal Helpers & Zero-Alloc UTF-8
     // ==========================================
 
+    public static int utf8Length(String s) {
+        if (s == null) return 0;
+        int len = s.length();
+        int utfLen = 0;
+        for (int i = 0; i < len; i++) {
+            char c = s.charAt(i);
+            if (c <= 0x7F) {
+                utfLen += 1;
+            } else if (c <= 0x7FF) {
+                utfLen += 2;
+            } else if (Character.isHighSurrogate(c)) {
+                utfLen += 4;
+                i++; // skip low surrogate
+            } else {
+                utfLen += 3;
+            }
+        }
+        return utfLen;
+    }
+
+    private void writeUtf8Direct(String s, int utfLen) {
+        if (s == null || utfLen == 0) return;
+        int len = s.length();
+        for (int i = 0; i < len; i++) {
+            char c = s.charAt(i);
+            if (c <= 0x7F) {
+                buffer.put((byte) c);
+            } else if (c <= 0x7FF) {
+                buffer.put((byte) (0xC0 | ((c >> 6) & 0x1F)));
+                buffer.put((byte) (0x80 | (c & 0x3F)));
+            } else if (Character.isHighSurrogate(c)) {
+                int codePoint = Character.toCodePoint(c, (i + 1 < len) ? s.charAt(++i) : '?');
+                buffer.put((byte) (0xF0 | ((codePoint >> 18) & 0x07)));
+                buffer.put((byte) (0x80 | ((codePoint >> 12) & 0x3F)));
+                buffer.put((byte) (0x80 | ((codePoint >> 6) & 0x3F)));
+                buffer.put((byte) (0x80 | (codePoint & 0x3F)));
+            } else {
+                buffer.put((byte) (0xE0 | ((c >> 12) & 0x0F)));
+                buffer.put((byte) (0x80 | ((c >> 6) & 0x3F)));
+                buffer.put((byte) (0x80 | (c & 0x3F)));
+            }
+        }
+    }
+
     private void putHeader(byte tagType, String name) {
-        byte[] utf8 = (name != null) ? name.getBytes(StandardCharsets.UTF_8) : new byte[0];
-        ensureCapacity(1 + 2 + utf8.length);
+        int utfLen = utf8Length(name);
+        ensureCapacity(1 + 2 + utfLen);
         buffer.put(tagType);
-        buffer.putShort((short) utf8.length);
-        if (utf8.length > 0) {
-            buffer.put(utf8);
+        buffer.putShort((short) utfLen);
+        if (utfLen > 0) {
+            writeUtf8Direct(name, utfLen);
         }
     }
 
@@ -437,11 +481,11 @@ public final class FastNbtWriter {
     }
 
     private void putUtf8StringHeader(String s) {
-        byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-        ensureCapacity(2 + bytes.length);
-        buffer.putShort((short) bytes.length);
-        if (bytes.length > 0) {
-            buffer.put(bytes);
+        int utfLen = utf8Length(s);
+        ensureCapacity(2 + utfLen);
+        buffer.putShort((short) utfLen);
+        if (utfLen > 0) {
+            writeUtf8Direct(s, utfLen);
         }
     }
 }

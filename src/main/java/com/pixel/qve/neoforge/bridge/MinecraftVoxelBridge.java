@@ -309,6 +309,9 @@ public final class MinecraftVoxelBridge {
         return null;
     }
 
+    private static final ThreadLocal<int[]> SCRATCH_BLOCK_IDS = ThreadLocal.withInitial(() -> new int[VoxelSection.VOXEL_COUNT]);
+    private static final ThreadLocal<long[]> SCRATCH_BITMASK = ThreadLocal.withInitial(() -> new long[VoxelSection.MASK_WORDS]);
+
     /**
      * Compiles a vanilla LevelChunkSection into an optimized VoxelSection and binds it
      * to the LevelChunkSection via IRaycastChunkSection.
@@ -331,23 +334,64 @@ public final class MinecraftVoxelBridge {
             return empty;
         }
 
-        VoxelSection compiled = new VoxelSection();
+        int[] scratchIds = SCRATCH_BLOCK_IDS.get();
+        long[] scratchMask = SCRATCH_BITMASK.get();
+        java.util.Arrays.fill(scratchMask, 0L);
+
+        int solidCount = 0;
+        int firstSolidId = BlockIdRegistry.AIR_ID;
+        boolean homogeneous = true;
         boolean allFullCubes = true;
+
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     BlockState state = vanillaSection.getBlockState(x, y, z);
+                    int idx = VoxelSection.voxelIndex(x, y, z);
                     if (!state.isAir()) {
                         int id = getBlockId(state);
-                        compiled.setVoxel(x, y, z, true, id);
-                        if (allFullCubes && !SHAPE_REGISTRY.getShape(id).isFullCube()) {
+                        scratchIds[idx] = id;
+                        scratchMask[idx >>> 6] |= (1L << (idx & 63));
+                        solidCount++;
+
+                        if (firstSolidId == BlockIdRegistry.AIR_ID) {
+                            firstSolidId = id;
+                        } else if (id != firstSolidId) {
+                            homogeneous = false;
+                        }
+
+                        if (allFullCubes && !SHAPE_REGISTRY.isFullCube(id)) {
                             allFullCubes = false;
                         }
+                    } else {
+                        scratchIds[idx] = BlockIdRegistry.AIR_ID;
                     }
                 }
             }
         }
-        compiled.setAllSolidAreFullCubes(allFullCubes);
+
+        if (solidCount == 0) {
+            VoxelSection empty = VoxelSection.EMPTY;
+            if (column != null) {
+                column.setSection(sectionY, empty);
+            }
+            if (vanillaSection instanceof IRaycastChunkSection bridge) {
+                bridge.raycast$setVoxelSection(empty);
+                bridge.raycast$setVoxelColumn(column, sectionY);
+            }
+            return empty;
+        }
+
+        VoxelSection compiled;
+        if (solidCount == VoxelSection.VOXEL_COUNT && homogeneous && firstSolidId != BlockIdRegistry.AIR_ID) {
+            // 100% full of a single block (e.g. stone, deepslate underground)
+            // Zero heap allocation for blockIds array (saves 16 KB per underground section!)
+            compiled = VoxelSection.createHomogeneous(firstSolidId, allFullCubes);
+        } else {
+            long[] maskCopy = java.util.Arrays.copyOf(scratchMask, VoxelSection.MASK_WORDS);
+            int[] idsCopy = java.util.Arrays.copyOf(scratchIds, VoxelSection.VOXEL_COUNT);
+            compiled = new VoxelSection(maskCopy, idsCopy, solidCount, allFullCubes);
+        }
 
         if (column != null) {
             column.setSection(sectionY, compiled);
