@@ -29,8 +29,8 @@ public final class McaRegionWriter implements Closeable {
     private static volatile int configuredCompressionLevel = Deflater.BEST_SPEED;
     private static final ThreadLocal<Deflater> DEFLATER_CACHE = ThreadLocal.withInitial(() -> new Deflater(configuredCompressionLevel, false));
     private static final ThreadLocal<byte[]> COMPRESS_TEMP_BUF = ThreadLocal.withInitial(() -> new byte[256 * 1024]);
-    private static final ThreadLocal<ByteBuffer> DEFLATED_PAYLOAD_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocate(256 * 1024));
-    private static final ThreadLocal<ByteBuffer> SECTOR_WRITE_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocate(256 * 1024));
+    private static final ThreadLocal<ByteBuffer> DEFLATED_PAYLOAD_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(256 * 1024));
+    private static final ThreadLocal<ByteBuffer> SECTOR_WRITE_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(256 * 1024));
     private static final byte[] ZERO_SECTOR_PAD = new byte[4096];
 
     private final Path filePath;
@@ -261,11 +261,29 @@ public final class McaRegionWriter implements Closeable {
      * @throws IOException If write or compression fails
      */
     public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, byte[] uncompressed) throws IOException {
+        return writeChunk(localChunkX, localChunkZ, ByteBuffer.wrap(uncompressed), true);
+    }
+
+    public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, byte[] uncompressed, boolean syncHeader) throws IOException {
+        return writeChunk(localChunkX, localChunkZ, ByteBuffer.wrap(uncompressed), syncHeader);
+    }
+
+    /**
+     * Compresses and writes an uncompressed chunk NBT payload directly from a ByteBuffer to the region file.
+     *
+     * @param localChunkX  Local chunk X [0..31]
+     * @param localChunkZ  Local chunk Z [0..31]
+     * @param uncompressed Uncompressed NBT bytes
+     * @return WriteMetrics
+     * @throws IOException If write or compression fails
+     */
+    public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, ByteBuffer uncompressed) throws IOException {
         return writeChunk(localChunkX, localChunkZ, uncompressed, true);
     }
 
     /**
-     * Writes an uncompressed chunk into this region file, optionally deferring header sync.
+     * Writes an uncompressed chunk into this region file directly from a ByteBuffer, optionally deferring header sync.
+     * Zero heap allocation: deflates directly from the ByteBuffer and streams via DirectByteBuffer DMA.
      *
      * @param localChunkX  Local chunk X within region [0..31]
      * @param localChunkZ  Local chunk Z within region [0..31]
@@ -274,17 +292,17 @@ public final class McaRegionWriter implements Closeable {
      * @return WriteMetrics detailing sector allocation and compression
      * @throws IOException If write or compression fails
      */
-    public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, byte[] uncompressed, boolean syncHeader) throws IOException {
+    public synchronized WriteMetrics writeChunk(int localChunkX, int localChunkZ, ByteBuffer uncompressed, boolean syncHeader) throws IOException {
         if (localChunkX < 0 || localChunkX >= 32 || localChunkZ < 0 || localChunkZ >= 32) {
             throw new IndexOutOfBoundsException("Local chunk coords must be in 0..31: (" + localChunkX + ", " + localChunkZ + ")");
         }
         Objects.requireNonNull(uncompressed, "uncompressed NBT cannot be null");
 
-        // 1. Zlib Deflation
+        // 1. Zlib Deflation directly from ByteBuffer
         Deflater deflater = DEFLATER_CACHE.get();
         deflater.reset();
         deflater.setLevel(configuredCompressionLevel);
-        deflater.setInput(uncompressed, 0, uncompressed.length);
+        deflater.setInput(uncompressed.duplicate());
         deflater.finish();
 
         byte[] temp = COMPRESS_TEMP_BUF.get();
@@ -296,7 +314,7 @@ public final class McaRegionWriter implements Closeable {
             int count = deflater.deflate(temp, 0, temp.length);
             if (count > 0) {
                 if (deflatedBuffer.remaining() < count) {
-                    ByteBuffer expanded = ByteBuffer.allocate(Math.max(deflatedBuffer.capacity() * 2, deflatedBuffer.capacity() + count));
+                    ByteBuffer expanded = ByteBuffer.allocateDirect(Math.max(deflatedBuffer.capacity() * 2, deflatedBuffer.capacity() + count));
                     deflatedBuffer.flip();
                     expanded.put(deflatedBuffer);
                     DEFLATED_PAYLOAD_BUF.set(expanded);
@@ -324,7 +342,7 @@ public final class McaRegionWriter implements Closeable {
         int totalPayloadBytes = alloc.sectorCount() * 4096;
         ByteBuffer writeBuffer = SECTOR_WRITE_BUF.get();
         if (writeBuffer.capacity() < totalPayloadBytes) {
-            writeBuffer = ByteBuffer.allocate(totalPayloadBytes);
+            writeBuffer = ByteBuffer.allocateDirect(totalPayloadBytes);
             SECTOR_WRITE_BUF.set(writeBuffer);
         }
         writeBuffer.clear();

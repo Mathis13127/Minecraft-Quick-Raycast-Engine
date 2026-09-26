@@ -31,8 +31,13 @@ public final class BlockStateDictionary {
     private final int[] hashValues = new int[TABLE_SIZE];
     private final long[] occupied = new long[TABLE_SIZE / 64];
 
+    private static final byte[] NBT_NAME = "Name".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    private static final byte[] NBT_PROPERTIES = "Properties".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    private static final byte[] NBT_AIR = "minecraft:air".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+
     private final Map<Long, Integer> stateKeyToId = new ConcurrentHashMap<>();
     private final Map<Integer, String> idToCanonicalState = new ConcurrentHashMap<>();
+    private final Map<Integer, byte[]> idToPrecompiledPaletteNbt = new ConcurrentHashMap<>();
 
     private final BlockIdRegistry blockRegistry;
     private final PropertyIndexRegistry propertyRegistry = new PropertyIndexRegistry();
@@ -44,6 +49,7 @@ public final class BlockStateDictionary {
      */
     public BlockStateDictionary(BlockIdRegistry blockRegistry) {
         this.blockRegistry = Objects.requireNonNull(blockRegistry, "BlockIdRegistry cannot be null");
+        this.idToPrecompiledPaletteNbt.put(BlockIdRegistry.AIR_ID, compileAirPaletteNbt());
     }
 
     /**
@@ -128,6 +134,7 @@ public final class BlockStateDictionary {
             if (bStart >= 0 && bEnd > bStart) {
                 parseAndRegisterPropertiesString(blockId, canonicalState.substring(bStart + 1, bEnd));
             }
+            idToPrecompiledPaletteNbt.put(blockId, compilePaletteNbt(blockId, canonicalState));
         }
 
         int hash = (int) (stateKey ^ (stateKey >>> 32));
@@ -312,6 +319,81 @@ public final class BlockStateDictionary {
             return state;
         }
         return blockRegistry.getName(blockId);
+    }
+
+    private static byte[] compileAirPaletteNbt() {
+        com.pixel.qve.mca.writer.FastNbtWriter writer = new com.pixel.qve.mca.writer.FastNbtWriter(32);
+        writer.beginListCompound();
+        writer.putString(NBT_NAME, NBT_AIR);
+        writer.endCompound();
+        return writer.toByteArray();
+    }
+
+    /**
+     * Retrieves the precompiled raw binary NBT compound bytes for a palette entry representing the given block ID.
+     * On the first request for a given block ID, compiles the compound once and caches it permanently.
+     *
+     * @param blockId 32-bit block ID
+     * @return Precompiled byte array of the NBT compound (without list element header)
+     */
+    public byte[] getPrecompiledPaletteNbt(int blockId) {
+        byte[] precompiled = idToPrecompiledPaletteNbt.get(blockId);
+        if (precompiled != null) {
+            return precompiled;
+        }
+        precompiled = compilePaletteNbt(blockId, getCanonicalState(blockId));
+        idToPrecompiledPaletteNbt.put(blockId, precompiled);
+        return precompiled;
+    }
+
+    private byte[] compilePaletteNbt(int blockId, String canonicalState) {
+        if (blockId == BlockIdRegistry.AIR_ID) {
+            return compileAirPaletteNbt();
+        }
+
+        String canonical = canonicalState;
+        if (canonical == null || canonical.isEmpty()) {
+            canonical = blockRegistry.getName(blockId);
+        }
+        if (canonical == null || canonical.isEmpty()) {
+            return compileAirPaletteNbt();
+        }
+
+        if (canonical.startsWith("Block{")) {
+            int closeBrace = canonical.indexOf('}');
+            if (closeBrace > 6) {
+                String inner = canonical.substring(6, closeBrace);
+                String rest = canonical.substring(closeBrace + 1);
+                canonical = inner + rest;
+            }
+        }
+
+        com.pixel.qve.mca.writer.FastNbtWriter writer = new com.pixel.qve.mca.writer.FastNbtWriter(256);
+        writer.beginListCompound();
+
+        int bracketIdx = canonical.indexOf('[');
+        if (bracketIdx == -1) {
+            writer.putString(NBT_NAME, canonical);
+        } else {
+            String name = canonical.substring(0, bracketIdx);
+            String props = canonical.substring(bracketIdx + 1, canonical.length() - 1);
+            writer.putString(NBT_NAME, name);
+            writer.beginCompound(NBT_PROPERTIES);
+
+            String[] pairs = props.split(",");
+            for (String pair : pairs) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    String k = pair.substring(0, eq).trim();
+                    String v = pair.substring(eq + 1).trim();
+                    writer.putString(k, v);
+                }
+            }
+            writer.endCompound();
+        }
+
+        writer.endCompound();
+        return writer.toByteArray();
     }
 
     /**

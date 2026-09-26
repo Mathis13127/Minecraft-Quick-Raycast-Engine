@@ -30,7 +30,11 @@ public final class ChunkEditsApplicator {
     /**
      * Record capturing a mutation applied to RAM for transactional rollback in case of error.
      */
-    public record AppliedRamMutation(BlockPos pos, BlockState previousState, CompoundTag previousBeNbt) {}
+    public record AppliedRamMutation(long packedPos, BlockState previousState, CompoundTag previousBeNbt) {
+        public BlockPos pos() {
+            return BlockPos.of(packedPos);
+        }
+    }
 
     private ChunkEditsApplicator() {}
 
@@ -69,7 +73,7 @@ public final class ChunkEditsApplicator {
                                 int wx = chunkBaseX | dx;
                                 mutPos.set(wx, wy, wz);
                                 if (rollbackRecord != null) {
-                                    rollbackRecord.add(new AppliedRamMutation(mutPos.immutable(), chunk.getBlockState(mutPos), null));
+                                    rollbackRecord.add(new AppliedRamMutation(BlockPos.asLong(wx, wy, wz), chunk.getBlockState(mutPos), null));
                                 }
                                 chunk.setBlockState(mutPos, target, false);
                                 appliedCount++;
@@ -91,7 +95,7 @@ public final class ChunkEditsApplicator {
                                 int wx = chunkBaseX | dx;
                                 mutPos.set(wx, wy, wz);
                                 if (rollbackRecord != null) {
-                                    rollbackRecord.add(new AppliedRamMutation(mutPos.immutable(), chunk.getBlockState(mutPos), null));
+                                    rollbackRecord.add(new AppliedRamMutation(BlockPos.asLong(wx, wy, wz), chunk.getBlockState(mutPos), null));
                                 }
                                 chunk.setBlockState(mutPos, target, false);
                                 appliedCount++;
@@ -103,14 +107,16 @@ public final class ChunkEditsApplicator {
         }
 
         // 2. Individual block mutations
-        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+        for (int i = 0, size = mutations.size(); i < size; i++) {
+            ChunkWriteBatch.BlockMutation m = mutations.get(i);
             mutPos.set(m.worldX(), m.worldY(), m.worldZ());
             BlockState cur = chunk.getBlockState(mutPos);
             if (m.matchesFilter(-1, cur)) {
                 if (rollbackRecord != null) {
                     BlockEntity oldBe = level.getBlockEntity(mutPos);
                     CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
-                    rollbackRecord.add(new AppliedRamMutation(mutPos.immutable(), cur, oldBeNbt));
+                    rollbackRecord.add(new AppliedRamMutation(m.posAsLong(), cur, oldBeNbt));
                 }
 
                 // Flags: 2 (send client packet) | 16 (UPDATE_KNOWN_SHAPE) | 128 (suppress light updates)
@@ -198,7 +204,9 @@ public final class ChunkEditsApplicator {
         }
 
         // 2. Individual block mutations
-        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+        for (int i = 0, size = mutations.size(); i < size; i++) {
+            ChunkWriteBatch.BlockMutation m = mutations.get(i);
             mutPos.set(m.worldX(), m.worldY(), m.worldZ());
             BlockState cur = chunk.getBlockState(mutPos);
             if (m.matchesFilter(-1, cur)) {
@@ -234,12 +242,14 @@ public final class ChunkEditsApplicator {
     public static void rollback(ServerLevel level, List<AppliedRamMutation> applied) {
         if (level == null || applied == null || applied.isEmpty()) return;
 
+        BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
         for (int i = applied.size() - 1; i >= 0; i--) {
             AppliedRamMutation arm = applied.get(i);
             try {
-                level.setBlock(arm.pos(), arm.previousState(), 2 | 16 | 128);
+                mutPos.set(arm.packedPos());
+                level.setBlock(mutPos, arm.previousState(), 2 | 16 | 128);
                 if (arm.previousBeNbt() != null) {
-                    BlockEntity be = level.getBlockEntity(arm.pos());
+                    BlockEntity be = level.getBlockEntity(mutPos);
                     if (be != null) {
                         be.loadWithComponents(arm.previousBeNbt(), level.registryAccess());
                         be.setChanged();

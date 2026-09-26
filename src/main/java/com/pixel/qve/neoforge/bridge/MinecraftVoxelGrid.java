@@ -159,26 +159,30 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
             return whole;
         }
 
-        List<ChunkWriteBatch.BlockMutation> matching = null;
-        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-            if ((m.worldY() >> 4) == sectionY) {
-                if (matching == null) matching = new ArrayList<>();
-                matching.add(m);
+        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+        boolean hasAny = false;
+        for (int i = 0, size = mutations.size(); i < size; i++) {
+            if ((mutations.get(i).worldY() >> 4) == sectionY) {
+                hasAny = true;
+                break;
             }
         }
 
-        if (matching == null || matching.isEmpty()) {
+        if (!hasAny) {
             return baseSection;
         }
 
         VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
-        for (ChunkWriteBatch.BlockMutation m : matching) {
-            int lx = m.worldX() & 15;
-            int ly = m.worldY() & 15;
-            int lz = m.worldZ() & 15;
-            int curId = copy.getBlockId(lx, ly, lz);
-            if (m.matchesFilter(curId, null)) {
-                copy.setVoxel(lx, ly, lz, m.targetBlockId() != 0, m.targetBlockId());
+        for (int i = 0, size = mutations.size(); i < size; i++) {
+            ChunkWriteBatch.BlockMutation m = mutations.get(i);
+            if ((m.worldY() >> 4) == sectionY) {
+                int lx = m.worldX() & 15;
+                int ly = m.worldY() & 15;
+                int lz = m.worldZ() & 15;
+                int curId = copy.getBlockId(lx, ly, lz);
+                if (m.matchesFilter(curId, null)) {
+                    copy.setVoxel(lx, ly, lz, m.targetBlockId() != 0, m.targetBlockId());
+                }
             }
         }
         return copy;

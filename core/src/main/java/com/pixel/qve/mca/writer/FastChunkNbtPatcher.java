@@ -161,6 +161,8 @@ public final class FastChunkNbtPatcher {
         targetWriter.endCompound();
     }
 
+    private static final ThreadLocal<int[]> SECTION_Y_BUF = ThreadLocal.withInitial(() -> new int[64]);
+
     private static void patchSectionsList(ByteBuffer buf, FastNbtWriter writer,
                                           Map<Integer, VoxelSection> modifiedSections,
                                           int minSectionY, int maxSectionY,
@@ -177,9 +179,12 @@ public final class FastChunkNbtPatcher {
 
         int origCount = buf.getInt();
         int listStart = buf.position();
-        int[] sectionYPerIndex = new int[origCount];
-        Arrays.fill(sectionYPerIndex, Integer.MIN_VALUE);
-        Set<Integer> existingYLevels = new HashSet<>();
+        int[] sectionYPerIndex = SECTION_Y_BUF.get();
+        if (sectionYPerIndex.length < origCount) {
+            sectionYPerIndex = new int[Math.max(origCount, sectionYPerIndex.length * 2)];
+            SECTION_Y_BUF.set(sectionYPerIndex);
+        }
+        long existingYMask = 0L;
 
         // Pass 1: Pre-scan existing section Y levels
         for (int i = 0; i < origCount; i++) {
@@ -200,14 +205,19 @@ public final class FastChunkNbtPatcher {
             }
             sectionYPerIndex[i] = currentY;
             if (currentY != Integer.MIN_VALUE) {
-                existingYLevels.add(currentY);
+                int bit = currentY + 16;
+                if (bit >= 0 && bit < 64) {
+                    existingYMask |= (1L << bit);
+                }
             }
         }
 
         int newlyAddedCount = 0;
         if (modifiedSections != null) {
             for (int secY : modifiedSections.keySet()) {
-                if (secY >= minSectionY && secY <= maxSectionY && !existingYLevels.contains(secY)) {
+                int bit = secY + 16;
+                boolean exists = (bit >= 0 && bit < 64) && ((existingYMask & (1L << bit)) != 0L);
+                if (secY >= minSectionY && secY <= maxSectionY && !exists) {
                     newlyAddedCount++;
                 }
             }
@@ -275,7 +285,9 @@ public final class FastChunkNbtPatcher {
         if (modifiedSections != null && newlyAddedCount > 0) {
             for (Map.Entry<Integer, VoxelSection> entry : modifiedSections.entrySet()) {
                 int secY = entry.getKey();
-                if (secY >= minSectionY && secY <= maxSectionY && !existingYLevels.contains(secY)) {
+                int bit = secY + 16;
+                boolean exists = (bit >= 0 && bit < 64) && ((existingYMask & (1L << bit)) != 0L);
+                if (secY >= minSectionY && secY <= maxSectionY && !exists) {
                     writer.beginListCompound();
                     writer.putByte(Y_NAME, (byte) secY);
                     FastChunkNbtWriter.writeSectionBlockStates(writer, entry.getValue(), registry);

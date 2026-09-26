@@ -147,6 +147,10 @@ public final class ChunkWriteBatch {
             byte[] rawNbt, CompoundTag tagNbt,
             int filterBlockId, BlockState filterState
     ) {
+        public long posAsLong() {
+            return BlockPos.asLong(worldX, worldY, worldZ);
+        }
+
         public boolean matchesFilter(int currentBlockId, BlockState currentState) {
             if (filterBlockId < 0 && filterState == null) {
                 return true; // Unconditional

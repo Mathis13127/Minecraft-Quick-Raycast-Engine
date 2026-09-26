@@ -29,6 +29,7 @@ public final class McaWriteCoordinator implements Closeable {
     private final Map<Long, McaRegionWriter> openWriters = new ConcurrentHashMap<>();
     private final List<IChunkWriteListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean synchronousVerification = false;
+    private static final ThreadLocal<FastNbtWriter> NBT_WRITER_CACHE = ThreadLocal.withInitial(() -> new FastNbtWriter(128 * 1024));
 
     /**
      * Constructs an McaWriteCoordinator for a region directory.
@@ -198,7 +199,8 @@ public final class McaWriteCoordinator implements Closeable {
                     int localZ = task.chunkZ() & 31;
 
                     // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
-                    FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
+                    FastNbtWriter nbtWriter = NBT_WRITER_CACHE.get();
+                    nbtWriter.reset();
                     boolean patched = false;
                     if (writer.hasChunk(localX, localZ)) {
                         java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
@@ -225,10 +227,9 @@ public final class McaWriteCoordinator implements Closeable {
                     if (!patched) {
                         FastChunkNbtWriter.writeChunk(nbtWriter, task.chunkX(), task.chunkZ(), minSectionY, maxSectionY, registry, task.sections(), task.blockEntities());
                     }
-                    byte[] uncompressed = nbtWriter.toByteArray();
 
                     // 2. Write payload to sector, deferring header sync
-                    McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, false);
+                    McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, nbtWriter.toReadBuffer(), false);
                     metricsList.add(metrics);
 
                     // 3. Notify listeners
@@ -341,7 +342,8 @@ public final class McaWriteCoordinator implements Closeable {
 
             try {
                 // 1. Serialize Chunk NBT: patch existing chunk non-destructively, or create ex-nihilo if new
-                FastNbtWriter nbtWriter = new FastNbtWriter(128 * 1024);
+                FastNbtWriter nbtWriter = NBT_WRITER_CACHE.get();
+                nbtWriter.reset();
                 boolean patched = false;
                 if (writer.hasChunk(localX, localZ)) {
                     java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
@@ -368,10 +370,9 @@ public final class McaWriteCoordinator implements Closeable {
                 if (!patched) {
                     FastChunkNbtWriter.writeChunk(nbtWriter, chunkX, chunkZ, minSectionY, maxSectionY, registry, sections, blockEntities);
                 }
-                byte[] uncompressed = nbtWriter.toByteArray();
 
                 // 2. Compress and write payload to region file (defer header sync)
-                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, uncompressed, false);
+                McaRegionWriter.WriteMetrics metrics = writer.writeChunk(localX, localZ, nbtWriter.toReadBuffer(), false);
 
                 // 3. Pre-commit coordinate verification
                 java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);

@@ -341,6 +341,31 @@ public final class FastNbtWriter {
         return this;
     }
 
+    /**
+     * Starts a named TAG_Long_Array field by writing its tag header and length prefix.
+     * Elements can then be written sequentially via {@link #putRawLong(long)} without allocating a long[] array.
+     *
+     * @param asciiName Field name in US-ASCII bytes
+     * @param count     Total number of longs to be written
+     */
+    public FastNbtWriter beginLongArray(byte[] asciiName, int count) {
+        putHeader(FastNbtReader.TAG_LONG_ARRAY, asciiName);
+        ensureCapacity(4 + count * 8);
+        buffer.putInt(count);
+        return this;
+    }
+
+    /**
+     * Appends a raw 64-bit long directly to the buffer without field header.
+     * Used in conjunction with {@link #beginLongArray(byte[], int)}.
+     *
+     * @param value 64-bit long value
+     */
+    public FastNbtWriter putRawLong(long value) {
+        buffer.putLong(value);
+        return this;
+    }
+
     // ==========================================
     // Raw Binary Insertion
     // ==========================================
@@ -355,6 +380,21 @@ public final class FastNbtWriter {
         if (bytes != null && bytes.length > 0) {
             ensureCapacity(bytes.length);
             buffer.put(bytes);
+        }
+        return this;
+    }
+
+    /**
+     * Appends a sub-range of raw bytes directly to the buffer.
+     *
+     * @param bytes  Raw byte array
+     * @param offset Starting byte offset
+     * @param length Number of bytes to copy
+     */
+    public FastNbtWriter putRawBytes(byte[] bytes, int offset, int length) {
+        if (bytes != null && length > 0) {
+            ensureCapacity(length);
+            buffer.put(bytes, offset, length);
         }
         return this;
     }
