@@ -183,9 +183,9 @@ public final class McaRegionReader implements Closeable {
                 return;
             }
             if (mmap == null || currentSize != mmap.capacity() || forceRemap) {
-                if (mmap != null) {
-                    DirectBufferCleaner.clean(this.mmap);
-                }
+                // Do not explicitly unmap the previous mmap with DirectBufferCleaner here:
+                // concurrent worker threads may currently be reading from it. The JVM GC / cleaner
+                // safely reclaims the orphaned buffer once active reader threads finish, preventing EXCEPTION_ACCESS_VIOLATION.
                 this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, currentSize);
             }
             ByteBuffer hBuf = ByteBuffer.allocate(4096);
