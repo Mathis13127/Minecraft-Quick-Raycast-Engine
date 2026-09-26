@@ -52,7 +52,7 @@ public final class ChunkWriteBatch {
     private final Long2ObjectLinkedOpenHashMap<ChunkEdits> chunkEditsMap = new Long2ObjectLinkedOpenHashMap<>();
     private final LongOpenHashSet remainingChunkKeys = new LongOpenHashSet();
     private volatile WriteOptions activeOptions = WriteOptions.DEFAULT;
-    private int totalBlockCount = 0;
+    private long totalBlockCount = 0;
 
     /**
      * Gets the Minecraft Level targeted by this batch.
@@ -200,24 +200,34 @@ public final class ChunkWriteBatch {
                 if (mutationBuffer.isEmpty()) {
                     return Collections.emptyList();
                 }
-                legacyMutations = new ArrayList<>(mutationBuffer.size());
+                legacyMutations = new ArrayList<>();
                 int chunkBaseX = chunkX << 4;
                 int chunkBaseZ = chunkZ << 4;
                 for (int i = 0, sz = mutationBuffer.size(); i < sz; i++) {
-                    int lx = mutationBuffer.localX(i);
-                    int wy = mutationBuffer.worldY(i);
-                    int lz = mutationBuffer.localZ(i);
+                    int bMinX = mutationBuffer.minX(i);
+                    int bMaxX = mutationBuffer.maxX(i);
+                    int bMinZ = mutationBuffer.minZ(i);
+                    int bMaxZ = mutationBuffer.maxZ(i);
+                    int bMinY = mutationBuffer.minY(i);
+                    int bMaxY = mutationBuffer.maxY(i);
                     int targetId = mutationBuffer.targetBlockId(i);
                     int filterId = mutationBuffer.filterBlockId(i);
                     byte[] raw = mutationBuffer.rawNbt(i);
                     BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
                     BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
-                    legacyMutations.add(new BlockMutation(
-                            chunkBaseX | lx, wy, chunkBaseZ | lz,
-                            targetId, targetState,
-                            raw, null,
-                            filterId, filterState
-                    ));
+
+                    for (int y = bMinY; y <= bMaxY; y++) {
+                        for (int z = bMinZ; z <= bMaxZ; z++) {
+                            for (int x = bMinX; x <= bMaxX; x++) {
+                                legacyMutations.add(new BlockMutation(
+                                        chunkBaseX | x, y, chunkBaseZ | z,
+                                        targetId, targetState,
+                                        raw, null,
+                                        filterId, filterState
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             return legacyMutations;
@@ -227,19 +237,20 @@ public final class ChunkWriteBatch {
             return wholeSections;
         }
 
-        public void addMutation(int localX, int worldY, int localZ, int targetBlockId, int filterBlockId, byte[] rawNbt) {
-            mutationBuffer.add(localX, worldY, localZ, targetBlockId, filterBlockId, rawNbt);
+        public void addBox(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, int targetBlockId, int filterBlockId, byte[] rawNbt) {
+            mutationBuffer.addBox(minX, minY, minZ, maxX, maxY, maxZ, targetBlockId, filterBlockId, rawNbt);
             legacyMutations = null;
+        }
+
+        public void addMutation(int localX, int worldY, int localZ, int targetBlockId, int filterBlockId, byte[] rawNbt) {
+            addBox(localX, worldY, localZ, localX, worldY, localZ, targetBlockId, filterBlockId, rawNbt);
         }
 
         public void addMutation(BlockMutation mutation) {
             int lx = mutation.worldX() & 15;
             int ly = mutation.worldY();
             int lz = mutation.worldZ() & 15;
-            mutationBuffer.add(lx, ly, lz, mutation.targetBlockId(), mutation.filterBlockId(), mutation.rawNbt());
-            if (legacyMutations != null) {
-                legacyMutations.add(mutation);
-            }
+            addBox(lx, ly, lz, lx, ly, lz, mutation.targetBlockId(), mutation.filterBlockId(), mutation.rawNbt());
         }
 
         public void setSection(int sectionY, VoxelSection section) {
@@ -367,7 +378,7 @@ public final class ChunkWriteBatch {
         }
 
         ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
-        edits.addMutation(x & 15, y, z & 15, blockId, filterBlockId, rawNbt);
+        edits.addBox(x & 15, y, z & 15, x & 15, y, z & 15, blockId, filterBlockId, rawNbt);
         totalBlockCount++;
         return this;
     }
@@ -458,34 +469,57 @@ public final class ChunkWriteBatch {
             int cMinX = Math.max(minX, cx << 4);
             int cMaxX = Math.min(maxX, (cx << 4) + 15);
             boolean fullSpanX = (cMinX == (cx << 4) && cMaxX == (cx << 4) + 15);
+            int localMinX = cMinX & 15;
+            int localMaxX = cMaxX & 15;
 
             for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
                 int cMinZ = Math.max(minZ, cz << 4);
                 int cMaxZ = Math.min(maxZ, (cz << 4) + 15);
                 boolean fullSpanZ = (cMinZ == (cz << 4) && cMaxZ == (cz << 4) + 15);
+                int localMinZ = cMinZ & 15;
+                int localMaxZ = cMaxZ & 15;
 
                 ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
 
-                for (int secY = minSecY; secY <= maxSecY; secY++) {
-                    int sMinY = Math.max(clampedMinY, secY << 4);
-                    int sMaxY = Math.min(clampedMaxY, (secY << 4) + 15);
-                    boolean fullSpanY = (sMinY == (secY << 4) && sMaxY == (secY << 4) + 15);
-
-                    if (replaceFilter == null && fullSpanX && fullSpanZ && fullSpanY) {
-                        // Section is completely enclosed and unconditional: O(1) homogeneous section replacement
-                        edits.setSection(secY, VoxelSection.createHomogeneous(blockId, isFullCube));
-                        totalBlockCount += VoxelSection.VOXEL_COUNT;
-                    } else {
-                        // Partial section or filtered: enqueue mutations
-                        for (int y = sMinY; y <= sMaxY; y++) {
-                            for (int z = cMinZ; z <= cMaxZ; z++) {
-                                for (int x = cMinX; x <= cMaxX; x++) {
-                                    edits.addMutation(x & 15, y, z & 15, blockId, filterId, null);
-                                    totalBlockCount++;
-                                }
-                            }
+                if (replaceFilter == null && fullSpanX && fullSpanZ) {
+                    // Check if there are whole sections enclosed
+                    int firstFullSec = -1;
+                    int lastFullSec = -1;
+                    for (int secY = minSecY; secY <= maxSecY; secY++) {
+                        int secBase = secY << 4;
+                        if (clampedMinY <= secBase && clampedMaxY >= secBase + 15) {
+                            if (firstFullSec == -1) firstFullSec = secY;
+                            lastFullSec = secY;
                         }
                     }
+
+                    if (firstFullSec == -1) {
+                        // No full sections: single box for the entire vertical slice
+                        edits.addBox(0, clampedMinY, 0, 15, clampedMaxY, 15, blockId, -1, null);
+                        totalBlockCount += 16 * 16 * (clampedMaxY - clampedMinY + 1);
+                    } else {
+                        // 1. Bottom partial slice (if any)
+                        int bottomTopY = (firstFullSec << 4) - 1;
+                        if (clampedMinY <= bottomTopY) {
+                            edits.addBox(0, clampedMinY, 0, 15, bottomTopY, 15, blockId, -1, null);
+                            totalBlockCount += 16 * 16 * (bottomTopY - clampedMinY + 1);
+                        }
+                        // 2. Full sections
+                        for (int secY = firstFullSec; secY <= lastFullSec; secY++) {
+                            edits.setSection(secY, VoxelSection.createHomogeneous(blockId, isFullCube));
+                            totalBlockCount += VoxelSection.VOXEL_COUNT;
+                        }
+                        // 3. Top partial slice (if any)
+                        int topBottomY = (lastFullSec << 4) + 16;
+                        if (clampedMaxY >= topBottomY) {
+                            edits.addBox(0, topBottomY, 0, 15, clampedMaxY, 15, blockId, -1, null);
+                            totalBlockCount += 16 * 16 * (clampedMaxY - topBottomY + 1);
+                        }
+                    }
+                } else {
+                    // Partial X/Z span or conditional filter: add a single 3D box for the entire column!
+                    edits.addBox(localMinX, clampedMinY, localMinZ, localMaxX, clampedMaxY, localMaxZ, blockId, filterId, null);
+                    totalBlockCount += (localMaxX - localMinX + 1) * (localMaxZ - localMinZ + 1) * (clampedMaxY - clampedMinY + 1);
                 }
             }
         }
@@ -514,7 +548,7 @@ public final class ChunkWriteBatch {
      *
      * @return Total voxel count
      */
-    public int getTotalBlockCount() {
+    public long getTotalBlockCount() {
         return totalBlockCount;
     }
 
@@ -551,13 +585,14 @@ public final class ChunkWriteBatch {
             PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
             if (pmb != null && !pmb.isEmpty()) {
                 for (int i = 0, sz = pmb.size(); i < sz; i++) {
-                    int wy = pmb.worldY(i);
-                    if (wy < worldMinY || wy > worldMaxY) {
+                    int minY = pmb.minY(i);
+                    int maxY = pmb.maxY(i);
+                    if (minY < worldMinY || maxY > worldMaxY) {
                         return Optional.of(WriteResult.failure(
                                 WriteStatus.FAIL_INVALID_COORDINATES,
                                 cx, cz,
-                                String.format("Block mutation at local (%d, %d, %d) Y=%d is outside world bounds [%d..%d]",
-                                        pmb.localX(i), wy, pmb.localZ(i), wy, worldMinY, worldMaxY)
+                                String.format("Block mutation bounds Y=[%d..%d] outside world bounds [%d..%d]",
+                                        minY, maxY, worldMinY, worldMaxY)
                         ));
                     }
                 }
@@ -625,7 +660,7 @@ public final class ChunkWriteBatch {
     public CompletableFuture<BatchWriteResult> executeAsync(WriteOptions options) {
         long startTime = System.nanoTime();
         if (chunkEditsMap.isEmpty()) {
-            return CompletableFuture.completedFuture(new BatchWriteResult(0, 0, 0, 0, 0, 0, 0L, List.of()));
+            return CompletableFuture.completedFuture(new BatchWriteResult(0, 0, 0, 0L, 0, 0, 0L, List.of()));
         }
 
         WriteOptions opts = (options != null) ? options : WriteOptions.DEFAULT;
@@ -636,7 +671,7 @@ public final class ChunkWriteBatch {
             remainingChunkKeys.addAll(chunkEditsMap.keySet());
         }
 
-        int totalBlocks = totalBlockCount;
+        long totalBlocks = totalBlockCount;
 
         // 1. Strict Pre-Flight Fail-Fast Validation (Zero blocks written if invalid)
         Optional<WriteResult> failFast = validate(opts);
@@ -822,11 +857,27 @@ public final class ChunkWriteBatch {
                         PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
                         if (pmb != null && !pmb.isEmpty()) {
                             for (int mi = 0, sz = pmb.size(); mi < sz; mi++) {
-                                int curId = ctx.getBlock(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi));
-                                if (pmb.matchesFilter(mi, curId)) {
-                                    ctx.setBlock(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi), pmb.targetBlockId(mi));
-                                    if (pmb.hasNbt(mi)) {
-                                        ctx.setBlockEntityRaw(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi), pmb.rawNbt(mi));
+                                int bMinX = pmb.minX(mi);
+                                int bMaxX = pmb.maxX(mi);
+                                int bMinZ = pmb.minZ(mi);
+                                int bMaxZ = pmb.maxZ(mi);
+                                int bMinY = pmb.minY(mi);
+                                int bMaxY = pmb.maxY(mi);
+                                int targetId = pmb.targetBlockId(mi);
+                                int filterId = pmb.filterBlockId(mi);
+                                byte[] rawNbt = pmb.rawNbt(mi);
+
+                                for (int y = bMinY; y <= bMaxY; y++) {
+                                    for (int z = bMinZ; z <= bMaxZ; z++) {
+                                        for (int x = bMinX; x <= bMaxX; x++) {
+                                            int curId = ctx.getBlock(x, y, z);
+                                            if (filterId < 0 || curId == filterId) {
+                                                ctx.setBlock(x, y, z, targetId);
+                                                if (rawNbt != null) {
+                                                    ctx.setBlockEntityRaw(x, y, z, rawNbt);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

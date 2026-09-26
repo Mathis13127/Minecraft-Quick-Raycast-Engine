@@ -65,7 +65,9 @@ public final class DeferredChunkQueue {
                 PrimitiveMutationBuffer srcBuf = edits.getMutationBuffer();
                 if (srcBuf != null && !srcBuf.isEmpty()) {
                     for (int mi = 0, sz = srcBuf.size(); mi < sz; mi++) {
-                        existing.addMutation(srcBuf.localX(mi), srcBuf.worldY(mi), srcBuf.localZ(mi), srcBuf.targetBlockId(mi), srcBuf.filterBlockId(mi), srcBuf.rawNbt(mi));
+                        existing.addBox(srcBuf.minX(mi), srcBuf.minY(mi), srcBuf.minZ(mi),
+                                srcBuf.maxX(mi), srcBuf.maxY(mi), srcBuf.maxZ(mi),
+                                srcBuf.targetBlockId(mi), srcBuf.filterBlockId(mi), srcBuf.rawNbt(mi));
                     }
                 } else {
                     for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
@@ -166,7 +168,7 @@ public final class DeferredChunkQueue {
             int lx = x & 15;
             int lz = z & 15;
             for (int i = srcBuf.size() - 1; i >= 0; i--) {
-                if (srcBuf.localX(i) == lx && srcBuf.worldY(i) == y && srcBuf.localZ(i) == lz) {
+                if (srcBuf.contains(i, lx, y, lz)) {
                     return srcBuf.targetBlockId(i);
                 }
             }

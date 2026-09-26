@@ -167,15 +167,30 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
                 return baseSection;
             }
             VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
+            int secMinY = sectionY << 4;
+            int secMaxY = secMinY + 15;
             for (int i = 0, size = pmb.size(); i < size; i++) {
-                if (pmb.sectionY(i) == sectionY) {
-                    int lx = pmb.localX(i);
-                    int ly = pmb.worldY(i) & 15;
-                    int lz = pmb.localZ(i);
-                    int curId = copy.getBlockId(lx, ly, lz);
-                    if (pmb.matchesFilter(i, curId)) {
-                        int targetId = pmb.targetBlockId(i);
-                        copy.setVoxel(lx, ly, lz, targetId != 0, targetId);
+                if (pmb.intersectsSection(i, sectionY)) {
+                    int bMinX = pmb.minX(i);
+                    int bMaxX = pmb.maxX(i);
+                    int bMinZ = pmb.minZ(i);
+                    int bMaxZ = pmb.maxZ(i);
+                    int bMinY = Math.max(secMinY, pmb.minY(i));
+                    int bMaxY = Math.min(secMaxY, pmb.maxY(i));
+                    int targetId = pmb.targetBlockId(i);
+                    int filterId = pmb.filterBlockId(i);
+                    int localMinY = bMinY & 15;
+                    int localMaxY = bMaxY & 15;
+
+                    for (int y = localMinY; y <= localMaxY; y++) {
+                        for (int z = bMinZ; z <= bMaxZ; z++) {
+                            for (int x = bMinX; x <= bMaxX; x++) {
+                                int curId = copy.getBlockId(x, y, z);
+                                if (filterId < 0 || curId == filterId) {
+                                    copy.setVoxel(x, y, z, targetId != 0, targetId);
+                                }
+                            }
+                        }
                     }
                 }
             }

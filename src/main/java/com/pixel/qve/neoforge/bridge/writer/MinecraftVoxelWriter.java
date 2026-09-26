@@ -713,7 +713,20 @@ public final class MinecraftVoxelWriter implements Closeable {
                         PrimitiveMutationBuffer buf = edits.getMutationBuffer();
                         if (buf != null && !buf.isEmpty()) {
                             for (int mi = 0, sz = buf.size(); mi < sz; mi++) {
-                                ctx.setBlock(buf.localX(mi), buf.worldY(mi), buf.localZ(mi), buf.targetBlockId(mi));
+                                int bMinX = buf.minX(mi);
+                                int bMaxX = buf.maxX(mi);
+                                int bMinZ = buf.minZ(mi);
+                                int bMaxZ = buf.maxZ(mi);
+                                int bMinY = buf.minY(mi);
+                                int bMaxY = buf.maxY(mi);
+                                int targetId = buf.targetBlockId(mi);
+                                for (int y = bMinY; y <= bMaxY; y++) {
+                                    for (int z = bMinZ; z <= bMaxZ; z++) {
+                                        for (int x = bMinX; x <= bMaxX; x++) {
+                                            ctx.setBlock(x, y, z, targetId);
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {

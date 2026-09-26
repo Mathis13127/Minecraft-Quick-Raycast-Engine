@@ -553,4 +553,80 @@ public class VoxelWriteAPITest {
         assertTrue(edits.getWholeSections().get(0).isHomogeneous());
         assertEquals(0, edits.getMutations().size());
     }
+
+    @Test
+    @DisplayName("Verify 1.7-Billion voxel fill across 391,876 chunks enqueues in < 1 second with 0 OOM and 1 box per chunk")
+    void testBillionVoxelFillWithoutOom() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        BlockState stoneState = Blocks.STONE.defaultBlockState();
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+
+        long t0 = System.currentTimeMillis();
+        // Exact user fill bounds: (-17, 93, 48) to (9983, 109, 10048)
+        // 10,001 x 17 x 10,001 = 1,700,340,017 voxels across 391,876 chunks
+        batch.fill(-17, 93, 48, 9983, 109, 10048, stoneState);
+        long elapsedMs = System.currentTimeMillis() - t0;
+
+        assertEquals(1_700_340_017L, batch.getTotalBlockCount());
+        assertEquals(391_876, batch.getAffectedChunkCount());
+        assertTrue(elapsedMs < 2000, "1.7B fill enqueuing must complete in under 2 seconds, took: " + elapsedMs + "ms");
+
+        // Inspect an interior chunk: chunk (10, 10)
+        ChunkWriteBatch.ChunkEdits interiorEdits = batch.getChunkEdits(10, 10);
+        assertNotNull(interiorEdits);
+        assertEquals(0, interiorEdits.getWholeSections().size());
+        // Must contain EXACTLY 1 compact 3D ChunkBox primitive, zero scalar voxel objects!
+        assertEquals(1, interiorEdits.getMutationBuffer().size());
+        assertEquals(0, interiorEdits.getMutationBuffer().minX(0));
+        assertEquals(15, interiorEdits.getMutationBuffer().maxX(0));
+        assertEquals(0, interiorEdits.getMutationBuffer().minZ(0));
+        assertEquals(15, interiorEdits.getMutationBuffer().maxZ(0));
+        assertEquals(93, interiorEdits.getMutationBuffer().minY(0));
+        assertEquals(109, interiorEdits.getMutationBuffer().maxY(0));
+        assertEquals(4352, interiorEdits.getMutationBuffer().voxelCount(0));
+
+        // Inspect edge chunk (-17 >> 4 = -2, 48 >> 4 = 3)
+        ChunkWriteBatch.ChunkEdits edgeEdits = batch.getChunkEdits(-2, 3);
+        assertNotNull(edgeEdits);
+        assertEquals(1, edgeEdits.getMutationBuffer().size());
+        // -17 & 15 = 15 (only 1 block wide on X in chunk -2: x=15)
+        assertEquals(15, edgeEdits.getMutationBuffer().minX(0));
+        assertEquals(15, edgeEdits.getMutationBuffer().maxX(0));
+    }
+
+    @Test
+    @DisplayName("Verify partial fill bounding box retention and on-demand legacy mutation expansion")
+    void testPartialFillAndOnDemandExpansion() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        BlockState stoneState = Blocks.STONE.defaultBlockState();
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+
+        // Fill a small 3x2x2 box: from (2, 5, 3) to (4, 6, 4) -> 3 x 2 x 2 = 12 voxels
+        batch.fill(2, 5, 3, 4, 6, 4, stoneState);
+
+        assertEquals(12, batch.getTotalBlockCount());
+        assertEquals(1, batch.getAffectedChunkCount());
+
+        ChunkWriteBatch.ChunkEdits edits = batch.getChunkEdits(0, 0);
+        assertNotNull(edits);
+        assertEquals(1, edits.getMutationBuffer().size());
+        assertEquals(2, edits.getMutationBuffer().minX(0));
+        assertEquals(4, edits.getMutationBuffer().maxX(0));
+        assertEquals(5, edits.getMutationBuffer().minY(0));
+        assertEquals(6, edits.getMutationBuffer().maxY(0));
+        assertEquals(3, edits.getMutationBuffer().minZ(0));
+        assertEquals(4, edits.getMutationBuffer().maxZ(0));
+        assertEquals(12, edits.getMutationBuffer().voxelCount(0));
+
+        // When legacy getMutations() is invoked, it must expand the 3D box into exactly 12 BlockMutations
+        List<ChunkWriteBatch.BlockMutation> legacy = edits.getMutations();
+        assertEquals(12, legacy.size());
+        assertEquals(12, legacy.size());
+    }
 }

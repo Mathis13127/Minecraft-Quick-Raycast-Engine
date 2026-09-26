@@ -272,13 +272,42 @@ public final class McaWriteCoordinator implements Closeable {
                             effectiveSections = (effectiveSections != null) ? new HashMap<>(effectiveSections) : new HashMap<>();
                             PrimitiveMutationBuffer buf = task.mutationBuffer();
                             for (int mi = 0, sz = buf.size(); mi < sz; mi++) {
-                                int wy = buf.worldY(mi);
-                                int secY = wy >> 4;
-                                VoxelSection sec = effectiveSections.computeIfAbsent(secY, k -> new VoxelSection());
-                                int lx = buf.localX(mi);
-                                int ly = wy & 15;
-                                int lz = buf.localZ(mi);
-                                sec.set(lx, ly, lz, buf.targetBlockId(mi));
+                                int bMinX = buf.minX(mi);
+                                int bMaxX = buf.maxX(mi);
+                                int bMinZ = buf.minZ(mi);
+                                int bMaxZ = buf.maxZ(mi);
+                                int bMinY = buf.minY(mi);
+                                int bMaxY = buf.maxY(mi);
+                                int targetId = buf.targetBlockId(mi);
+                                int filterId = buf.filterBlockId(mi);
+
+                                int sMin = bMinY >> 4;
+                                int sMax = bMaxY >> 4;
+                                for (int secY = sMin; secY <= sMax; secY++) {
+                                    if (secY < minSectionY || secY > maxSectionY) continue;
+                                    int secMinY = secY << 4;
+                                    int secMaxY = secMinY + 15;
+                                    int clampedMinY = Math.max(secMinY, bMinY);
+                                    int clampedMaxY = Math.min(secMaxY, bMaxY);
+
+                                    if (buf.coversSectionCompletely(mi, secY) && filterId < 0) {
+                                        effectiveSections.put(secY, VoxelSection.createHomogeneous(targetId, true));
+                                    } else {
+                                        VoxelSection sec = effectiveSections.computeIfAbsent(secY, k -> new VoxelSection());
+                                        int localMinY = clampedMinY & 15;
+                                        int localMaxY = clampedMaxY & 15;
+                                        for (int y = localMinY; y <= localMaxY; y++) {
+                                            for (int z = bMinZ; z <= bMaxZ; z++) {
+                                                for (int x = bMinX; x <= bMaxX; x++) {
+                                                    int curId = sec.getBlockId(x, y, z);
+                                                    if (filterId < 0 || curId == filterId) {
+                                                        sec.set(x, y, z, targetId);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else if (task.mutations() != null && !task.mutations().isEmpty()) {
                             effectiveSections = (effectiveSections != null) ? new HashMap<>(effectiveSections) : new HashMap<>();

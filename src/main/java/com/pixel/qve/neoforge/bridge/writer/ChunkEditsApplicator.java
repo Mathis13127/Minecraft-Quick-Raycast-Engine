@@ -106,31 +106,88 @@ public final class ChunkEditsApplicator {
             }
         }
 
-        // 2. Individual block mutations
-        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
-        for (int i = 0, size = mutations.size(); i < size; i++) {
-            ChunkWriteBatch.BlockMutation m = mutations.get(i);
-            mutPos.set(m.worldX(), m.worldY(), m.worldZ());
-            BlockState cur = chunk.getBlockState(mutPos);
-            if (m.matchesFilter(-1, cur)) {
-                if (rollbackRecord != null) {
-                    BlockEntity oldBe = level.getBlockEntity(mutPos);
-                    CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
-                    rollbackRecord.add(new AppliedRamMutation(m.posAsLong(), cur, oldBeNbt));
+        // 2. Block mutations / boxes
+        com.pixel.qve.mca.writer.PrimitiveMutationBuffer mutationBuf = edits.getMutationBuffer();
+        if (mutationBuf != null && !mutationBuf.isEmpty()) {
+            for (int i = 0, sz = mutationBuf.size(); i < sz; i++) {
+                int bMinX = mutationBuf.minX(i);
+                int bMaxX = mutationBuf.maxX(i);
+                int bMinZ = mutationBuf.minZ(i);
+                int bMaxZ = mutationBuf.maxZ(i);
+                int bMinY = mutationBuf.minY(i);
+                int bMaxY = mutationBuf.maxY(i);
+                int targetId = mutationBuf.targetBlockId(i);
+                int filterId = mutationBuf.filterBlockId(i);
+                BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
+                BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
+                byte[] rawNbt = mutationBuf.rawNbt(i);
+                CompoundTag tagNbt = null;
+                if (rawNbt != null) {
+                    try {
+                        tagNbt = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
+                    } catch (Exception ignored) {}
                 }
 
-                // Flags: 2 (send client packet) | 16 (UPDATE_KNOWN_SHAPE) | 128 (suppress light updates)
-                boolean placed = level.setBlock(mutPos, m.targetState(), 2 | 16 | 128);
-                if (!placed) {
-                    throw new IllegalStateException("Failed to place block in RAM at " + mutPos + " with state " + m.targetState());
-                }
-                appliedCount++;
+                for (int y = bMinY; y <= bMaxY; y++) {
+                    for (int z = bMinZ; z <= bMaxZ; z++) {
+                        int wz = chunkBaseZ | z;
+                        for (int x = bMinX; x <= bMaxX; x++) {
+                            int wx = chunkBaseX | x;
+                            mutPos.set(wx, y, wz);
+                            BlockState cur = chunk.getBlockState(mutPos);
+                            boolean matches = (filterId < 0) || (filterState != null && (cur == filterState || cur.getBlock() == filterState.getBlock()));
+                            if (matches) {
+                                if (rollbackRecord != null) {
+                                    BlockEntity oldBe = level.getBlockEntity(mutPos);
+                                    CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
+                                    rollbackRecord.add(new AppliedRamMutation(BlockPos.asLong(wx, y, wz), cur, oldBeNbt));
+                                }
 
-                if (m.tagNbt() != null) {
-                    BlockEntity be = level.getBlockEntity(mutPos);
-                    if (be != null) {
-                        be.loadWithComponents(m.tagNbt(), level.registryAccess());
-                        be.setChanged();
+                                // Flags: 2 (send client packet) | 16 (UPDATE_KNOWN_SHAPE) | 128 (suppress light updates)
+                                boolean placed = level.setBlock(mutPos, targetState, 2 | 16 | 128);
+                                if (!placed) {
+                                    throw new IllegalStateException("Failed to place block in RAM at " + mutPos + " with state " + targetState);
+                                }
+                                appliedCount++;
+
+                                if (tagNbt != null) {
+                                    BlockEntity be = level.getBlockEntity(mutPos);
+                                    if (be != null) {
+                                        be.loadWithComponents(tagNbt, level.registryAccess());
+                                        be.setChanged();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+            for (int i = 0, size = mutations.size(); i < size; i++) {
+                ChunkWriteBatch.BlockMutation m = mutations.get(i);
+                mutPos.set(m.worldX(), m.worldY(), m.worldZ());
+                BlockState cur = chunk.getBlockState(mutPos);
+                if (m.matchesFilter(-1, cur)) {
+                    if (rollbackRecord != null) {
+                        BlockEntity oldBe = level.getBlockEntity(mutPos);
+                        CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
+                        rollbackRecord.add(new AppliedRamMutation(m.posAsLong(), cur, oldBeNbt));
+                    }
+
+                    // Flags: 2 (send client packet) | 16 (UPDATE_KNOWN_SHAPE) | 128 (suppress light updates)
+                    boolean placed = level.setBlock(mutPos, m.targetState(), 2 | 16 | 128);
+                    if (!placed) {
+                        throw new IllegalStateException("Failed to place block in RAM at " + mutPos + " with state " + m.targetState());
+                    }
+                    appliedCount++;
+
+                    if (m.tagNbt() != null) {
+                        BlockEntity be = level.getBlockEntity(mutPos);
+                        if (be != null) {
+                            be.loadWithComponents(m.tagNbt(), level.registryAccess());
+                            be.setChanged();
+                        }
                     }
                 }
             }
@@ -203,21 +260,68 @@ public final class ChunkEditsApplicator {
             }
         }
 
-        // 2. Individual block mutations
-        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
-        for (int i = 0, size = mutations.size(); i < size; i++) {
-            ChunkWriteBatch.BlockMutation m = mutations.get(i);
-            mutPos.set(m.worldX(), m.worldY(), m.worldZ());
-            BlockState cur = chunk.getBlockState(mutPos);
-            if (m.matchesFilter(-1, cur)) {
-                chunk.setBlockState(mutPos, m.targetState(), false);
-                appliedCount++;
+        // 2. Block mutations / boxes
+        com.pixel.qve.mca.writer.PrimitiveMutationBuffer mutationBuf = edits.getMutationBuffer();
+        if (mutationBuf != null && !mutationBuf.isEmpty()) {
+            for (int i = 0, sz = mutationBuf.size(); i < sz; i++) {
+                int bMinX = mutationBuf.minX(i);
+                int bMaxX = mutationBuf.maxX(i);
+                int bMinZ = mutationBuf.minZ(i);
+                int bMaxZ = mutationBuf.maxZ(i);
+                int bMinY = mutationBuf.minY(i);
+                int bMaxY = mutationBuf.maxY(i);
+                int targetId = mutationBuf.targetBlockId(i);
+                int filterId = mutationBuf.filterBlockId(i);
+                BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
+                BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
+                byte[] rawNbt = mutationBuf.rawNbt(i);
+                CompoundTag tagNbt = null;
+                if (rawNbt != null) {
+                    try {
+                        tagNbt = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
+                    } catch (Exception ignored) {}
+                }
 
-                if (m.tagNbt() != null) {
-                    BlockEntity be = chunk.getBlockEntity(mutPos, LevelChunk.EntityCreationType.IMMEDIATE);
-                    if (be != null) {
-                        be.loadWithComponents(m.tagNbt(), chunk.getLevel().registryAccess());
-                        be.setChanged();
+                for (int y = bMinY; y <= bMaxY; y++) {
+                    for (int z = bMinZ; z <= bMaxZ; z++) {
+                        int wz = chunkBaseZ | z;
+                        for (int x = bMinX; x <= bMaxX; x++) {
+                            int wx = chunkBaseX | x;
+                            mutPos.set(wx, y, wz);
+                            BlockState cur = chunk.getBlockState(mutPos);
+                            boolean matches = (filterId < 0) || (filterState != null && (cur == filterState || cur.getBlock() == filterState.getBlock()));
+                            if (matches) {
+                                chunk.setBlockState(mutPos, targetState, false);
+                                appliedCount++;
+
+                                if (tagNbt != null) {
+                                    BlockEntity be = chunk.getBlockEntity(mutPos, LevelChunk.EntityCreationType.IMMEDIATE);
+                                    if (be != null) {
+                                        be.loadWithComponents(tagNbt, chunk.getLevel().registryAccess());
+                                        be.setChanged();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+            for (int i = 0, size = mutations.size(); i < size; i++) {
+                ChunkWriteBatch.BlockMutation m = mutations.get(i);
+                mutPos.set(m.worldX(), m.worldY(), m.worldZ());
+                BlockState cur = chunk.getBlockState(mutPos);
+                if (m.matchesFilter(-1, cur)) {
+                    chunk.setBlockState(mutPos, m.targetState(), false);
+                    appliedCount++;
+
+                    if (m.tagNbt() != null) {
+                        BlockEntity be = chunk.getBlockEntity(mutPos, LevelChunk.EntityCreationType.IMMEDIATE);
+                        if (be != null) {
+                            be.loadWithComponents(m.tagNbt(), chunk.getLevel().registryAccess());
+                            be.setChanged();
+                        }
                     }
                 }
             }

@@ -20,7 +20,7 @@ public record BatchWriteResult(
         int totalSubmitted,
         int totalSucceeded,
         int totalFailed,
-        int totalBlocks,
+        long totalBlocks,
         int ramChunkCount,
         int diskChunkCount,
         long durationNanos,
