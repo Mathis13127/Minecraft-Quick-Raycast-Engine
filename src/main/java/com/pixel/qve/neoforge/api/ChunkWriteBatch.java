@@ -4,12 +4,16 @@ import com.pixel.qve.mca.writer.McaWriteCoordinator;
 import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelGrid;
+import com.pixel.qve.neoforge.bridge.writer.ChunkEditsApplicator;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
+import com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue;
+import com.pixel.qve.neoforge.bridge.writer.MinecraftRegionFileBridge;
 import com.pixel.qve.neoforge.bridge.writer.MinecraftVoxelWriter;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.server.level.ServerPlayer;
@@ -29,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ChunkWriteBatch {
 
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(ChunkWriteBatch.class);
     private static final Set<ChunkWriteBatch> ACTIVE_BATCHES = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
@@ -209,6 +214,18 @@ public final class ChunkWriteBatch {
     }
 
     /**
+     * Retrieves the queued ChunkEdits for a specific chunk coordinate, if present.
+     *
+     * @param chunkX World chunk X
+     * @param chunkZ World chunk Z
+     * @return ChunkEdits instance or null
+     */
+    public ChunkEdits getChunkEdits(int chunkX, int chunkZ) {
+        long key = (((long) chunkX) << 32) | (chunkZ & 0xFFFFFFFFL);
+        return chunkEditsMap.get(key);
+    }
+
+    /**
      * Enqueues a single block placement into the batch.
      *
      * @param pos   Absolute BlockPos
@@ -337,6 +354,22 @@ public final class ChunkWriteBatch {
     }
 
     /**
+     * Enqueues an unconditional volumetric fill within absolute integer bounds.
+     *
+     * @param minX  Minimum X bound
+     * @param minY  Minimum Y bound
+     * @param minZ  Minimum Z bound
+     * @param maxX  Maximum X bound
+     * @param maxY  Maximum Y bound
+     * @param maxZ  Maximum Z bound
+     * @param state Target BlockState
+     * @return this builder
+     */
+    public ChunkWriteBatch fill(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, BlockState state) {
+        return fill(minX, minY, minZ, maxX, maxY, maxZ, state, null);
+    }
+
+    /**
      * Enqueues a volumetric fill within absolute integer bounds.
      *
      * @param minX          Minimum X bound
@@ -361,15 +394,47 @@ public final class ChunkWriteBatch {
 
         int blockId = MinecraftVoxelBridge.getBlockId(state);
         int filterId = (replaceFilter != null) ? MinecraftVoxelBridge.getBlockId(replaceFilter) : -1;
+        boolean isFullCube = MinecraftVoxelBridge.isFullCube(state);
 
-        for (int y = clampedMinY; y <= clampedMaxY; y++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int x = minX; x <= maxX; x++) {
-                    int cx = x >> 4;
-                    int cz = z >> 4;
-                    ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
-                    edits.addMutation(new BlockMutation(x, y, z, blockId, state, null, null, filterId, replaceFilter));
-                    totalBlockCount++;
+        int minChunkX = minX >> 4;
+        int maxChunkX = maxX >> 4;
+        int minChunkZ = minZ >> 4;
+        int maxChunkZ = maxZ >> 4;
+        int minSecY = clampedMinY >> 4;
+        int maxSecY = clampedMaxY >> 4;
+
+        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+            int cMinX = Math.max(minX, cx << 4);
+            int cMaxX = Math.min(maxX, (cx << 4) + 15);
+            boolean fullSpanX = (cMinX == (cx << 4) && cMaxX == (cx << 4) + 15);
+
+            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                int cMinZ = Math.max(minZ, cz << 4);
+                int cMaxZ = Math.min(maxZ, (cz << 4) + 15);
+                boolean fullSpanZ = (cMinZ == (cz << 4) && cMaxZ == (cz << 4) + 15);
+
+                ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
+
+                for (int secY = minSecY; secY <= maxSecY; secY++) {
+                    int sMinY = Math.max(clampedMinY, secY << 4);
+                    int sMaxY = Math.min(clampedMaxY, (secY << 4) + 15);
+                    boolean fullSpanY = (sMinY == (secY << 4) && sMaxY == (secY << 4) + 15);
+
+                    if (replaceFilter == null && fullSpanX && fullSpanZ && fullSpanY) {
+                        // Section is completely enclosed and unconditional: O(1) homogeneous section replacement
+                        edits.setSection(secY, VoxelSection.createHomogeneous(blockId, isFullCube));
+                        totalBlockCount += VoxelSection.VOXEL_COUNT;
+                    } else {
+                        // Partial section or filtered: enqueue mutations
+                        for (int y = sMinY; y <= sMaxY; y++) {
+                            for (int z = cMinZ; z <= cMaxZ; z++) {
+                                for (int x = cMinX; x <= cMaxX; x++) {
+                                    edits.addMutation(new BlockMutation(x, y, z, blockId, state, null, null, filterId, replaceFilter));
+                                    totalBlockCount++;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -452,6 +517,13 @@ public final class ChunkWriteBatch {
                         String.format("Direct MCA write rejected by strict policy: chunk (%d, %d) is currently loaded in RAM", cx, cz)
                 ));
             }
+            if (opts.isStrict() && ChunkExclusivityGuard.isRegionActiveInRam(level, cx >> 5, cz >> 5)) {
+                return Optional.of(WriteResult.failure(
+                        WriteStatus.FAIL_CHUNK_LOADED_IN_RAM,
+                        cx, cz,
+                        String.format("Direct MCA write rejected by strict policy: region r.%d.%d.mca is currently active in RAM / RegionFileStorage", cx >> 5, cz >> 5)
+                ));
+            }
 
             // 3. Existence check if CreationPolicy == FAIL_IF_MISSING
             if (opts.shouldFailIfMissing() && !inRam) {
@@ -528,16 +600,41 @@ public final class ChunkWriteBatch {
         // 2. Spatial Ordering: Prioritize active players, then centroid
         List<ChunkEdits> sortedChunks = getSortedChunkEdits(SortStrategy.PLAYER_PROXIMITY);
 
-        // 3. Partition chunks into RAM and Disk pools
+        // 3. Partition chunks into RAM, Deferred (unloaded in hybrid/active region), and Pure Disk pools
         List<ChunkEdits> ramChunks = new ArrayList<>();
-        List<ChunkEdits> diskChunks = new ArrayList<>();
+        List<ChunkEdits> deferredChunks = new ArrayList<>();
+        Map<Long, List<ChunkEdits>> pureDiskRegions = new LinkedHashMap<>();
 
+        // Group by region first to check region activity once per region
+        Map<Long, List<ChunkEdits>> byRegion = new LinkedHashMap<>();
         for (ChunkEdits edits : sortedChunks) {
-            boolean isRam = !opts.isStrict() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ);
-            if (isRam) {
-                ramChunks.add(edits);
+            int rx = edits.getChunkX() >> 5;
+            int rz = edits.getChunkZ() >> 5;
+            long rKey = ChunkPos.asLong(rx, rz);
+            byRegion.computeIfAbsent(rKey, k -> new ArrayList<>()).add(edits);
+        }
+
+        for (Map.Entry<Long, List<ChunkEdits>> entry : byRegion.entrySet()) {
+            long rKey = entry.getKey();
+            int rx = ChunkPos.getX(rKey);
+            int rz = ChunkPos.getZ(rKey);
+            List<ChunkEdits> chunkList = entry.getValue();
+
+            boolean regionActive = !opts.isStrict() && ChunkExclusivityGuard.isRegionActiveInRam(level, rx, rz);
+
+            if (!regionActive) {
+                // Pure disk region: zero chunks in RAM, zero open RegionFile handles
+                pureDiskRegions.put(rKey, chunkList);
             } else {
-                diskChunks.add(edits);
+                // Hybrid or active region: partition individual chunks into RAM vs Deferred
+                for (ChunkEdits edits : chunkList) {
+                    boolean inRam = ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.getChunkX(), edits.getChunkZ());
+                    if (inRam) {
+                        ramChunks.add(edits);
+                    } else {
+                        deferredChunks.add(edits);
+                    }
+                }
             }
         }
 
@@ -552,56 +649,35 @@ public final class ChunkWriteBatch {
 
                 for (ChunkEdits edits : ramChunks) {
                     long t0 = System.nanoTime();
-                    record AppliedRamMutation(BlockPos pos, BlockState previousState, CompoundTag previousBeNbt) {}
-                    List<AppliedRamMutation> applied = new ArrayList<>();
+                    List<ChunkEditsApplicator.AppliedRamMutation> applied = new ArrayList<>();
                     try {
-                        for (BlockMutation m : edits.mutations) {
-                            BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
-                            BlockState cur = level.getBlockState(pos);
-                            if (m.matchesFilter(-1, cur)) {
-                                BlockEntity oldBe = level.getBlockEntity(pos);
-                                CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
-                                applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
-
-                                // Enforce flag 16 (UPDATE_KNOWN_SHAPE) to prevent Vanilla from force-loading adjacent chunk borders
-                                boolean placed = level.setBlock(pos, m.targetState(), 2 | 16);
-                                if (!placed) {
-                                    throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + m.targetState());
-                                }
-                                if (m.tagNbt() != null) {
-                                    BlockEntity be = level.getBlockEntity(pos);
-                                    if (be != null) {
-                                        be.loadWithComponents(m.tagNbt(), level.registryAccess());
-                                        be.setChanged();
-                                    }
-                                }
+                        LevelChunk lc = (level instanceof ServerLevel sl)
+                                ? sl.getChunkSource().getChunkNow(edits.getChunkX(), edits.getChunkZ())
+                                : level.getChunk(edits.getChunkX(), edits.getChunkZ());
+                        if (lc == null) {
+                            if (opts.isUnified()) {
+                                LOGGER.warn("Chunk ({}, {}) was scheduled for RAM mutation but is no longer loaded in RAM. Enqueueing into DeferredChunkQueue.",
+                                        edits.getChunkX(), edits.getChunkZ());
+                                DeferredChunkQueue.enqueue(level, edits);
+                                resList.add(WriteResult.successDeferred(edits.getChunkX(), edits.getChunkZ(), System.nanoTime() - t0));
+                                continue;
                             }
+                            throw new IllegalStateException("Chunk (" + edits.getChunkX() + ", " + edits.getChunkZ() + ") is not loaded in RAM");
                         }
-                        LevelChunk lc = level.getChunk(edits.chunkX, edits.chunkZ);
-                        if (lc != null) {
-                            lc.setUnsaved(true);
-                        }
-                        if (grid != null) {
-                            grid.getCache().invalidateChunk(edits.chunkX, edits.chunkZ);
+                        if (level instanceof ServerLevel sl) {
+                            ChunkEditsApplicator.applyToLiveChunk(sl, lc, edits, applied);
+                        } else {
+                            ChunkEditsApplicator.applyToLoadingChunk(lc, edits);
                         }
                         long elapsed = System.nanoTime() - t0;
-                        resList.add(WriteResult.successRam(edits.chunkX, edits.chunkZ, elapsed));
+                        resList.add(WriteResult.successRam(edits.getChunkX(), edits.getChunkZ(), elapsed));
                     } catch (Throwable t) {
-                        for (int i = applied.size() - 1; i >= 0; i--) {
-                            AppliedRamMutation arm = applied.get(i);
-                            try {
-                                level.setBlock(arm.pos(), arm.previousState(), 2 | 16);
-                                if (arm.previousBeNbt() != null) {
-                                    BlockEntity be = level.getBlockEntity(arm.pos());
-                                    if (be != null) {
-                                        be.loadWithComponents(arm.previousBeNbt(), level.registryAccess());
-                                        be.setChanged();
-                                    }
-                                }
-                            } catch (Throwable ignored) {
-                            }
+                        LOGGER.error("Error executing RAM mutation batch for chunk ({}, {}), rolling back: {}",
+                                edits.getChunkX(), edits.getChunkZ(), t.getMessage(), t);
+                        if (level instanceof ServerLevel sl) {
+                            ChunkEditsApplicator.rollback(sl, applied);
                         }
-                        resList.add(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.chunkX, edits.chunkZ, t.getMessage()));
+                        resList.add(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.getChunkX(), edits.getChunkZ(), t.getMessage()));
                     }
                 }
                 ramFuture.complete(resList);
@@ -622,30 +698,36 @@ public final class ChunkWriteBatch {
                 final ChunkEdits ce = ramChunks.get(i);
                 futures.add(ramFuture.thenApply(list -> {
                     WriteResult res = list.get(idx);
-                    long key = (((long) ce.chunkX) << 32) | (ce.chunkZ & 0xFFFFFFFFL);
+                    long key = ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ());
                     remainingChunkKeys.remove(key);
                     return res;
                 }));
             }
         }
 
-        // 5. Dispatch Disk chunks via Region-Batching if enabled, with late-binding RAM check
+        // 5. Enqueue Deferred chunks for hybrid regions
+        for (ChunkEdits edits : deferredChunks) {
+            long t0 = System.nanoTime();
+            DeferredChunkQueue.enqueue(level, edits);
+            long key = ChunkPos.asLong(edits.getChunkX(), edits.getChunkZ());
+            long elapsed = System.nanoTime() - t0;
+            futures.add(CompletableFuture.completedFuture(
+                    WriteResult.successDeferred(edits.getChunkX(), edits.getChunkZ(), elapsed)
+            ).thenApply(res -> {
+                remainingChunkKeys.remove(key);
+                return res;
+            }));
+        }
+
+        // 6. Dispatch Pure Disk regions via Region-Batching if enabled
         MinecraftVoxelWriter writer = VoxelWriteAPI.getWriter(level);
         boolean useRegionBatching = com.pixel.qve.neoforge.config.QveConfig.REGION_BATCHING_ENABLED.get();
 
-        if (writer != null && useRegionBatching && !diskChunks.isEmpty()) {
-            Map<Long, List<ChunkEdits>> byRegion = new LinkedHashMap<>();
-            for (ChunkEdits edits : diskChunks) {
-                int rx = edits.chunkX >> 5;
-                int rz = edits.chunkZ >> 5;
-                long rKey = (((long) rx) << 32) | (rz & 0xFFFFFFFFL);
-                byRegion.computeIfAbsent(rKey, k -> new ArrayList<>()).add(edits);
-            }
-
-            for (Map.Entry<Long, List<ChunkEdits>> entry : byRegion.entrySet()) {
+        if (writer != null && useRegionBatching && !pureDiskRegions.isEmpty()) {
+            for (Map.Entry<Long, List<ChunkEdits>> entry : pureDiskRegions.entrySet()) {
                 long rKey = entry.getKey();
-                int rx = (int) (rKey >> 32);
-                int rz = (int) rKey;
+                int rx = ChunkPos.getX(rKey);
+                int rz = ChunkPos.getZ(rKey);
                 List<ChunkEdits> regionChunks = entry.getValue();
 
                 CompletableFuture<List<WriteResult>> regFuture = writer.writeRegionBatchAsync(rx, rz, regionChunks, opts);
@@ -654,28 +736,22 @@ public final class ChunkWriteBatch {
                     final ChunkEdits ce = regionChunks.get(i);
                     futures.add(regFuture.thenApply(list -> {
                         WriteResult res = (idx < list.size()) ? list.get(idx)
-                                : WriteResult.failure(WriteStatus.FAIL_IO_ERROR, ce.chunkX, ce.chunkZ, "Missing region batch result");
-                        long key = (((long) ce.chunkX) << 32) | (ce.chunkZ & 0xFFFFFFFFL);
+                                : WriteResult.failure(WriteStatus.FAIL_IO_ERROR, ce.getChunkX(), ce.getChunkZ(), "Missing region batch result");
+                        long key = ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ());
                         remainingChunkKeys.remove(key);
                         return res;
                     }));
                 }
             }
-        } else {
-            // Fallback single chunk dispatch with late RAM check
-            for (ChunkEdits edits : diskChunks) {
-                long key = (((long) edits.chunkX) << 32) | (edits.chunkZ & 0xFFFFFFFFL);
-                if (opts.isUnified() && ChunkExclusivityGuard.isChunkLoadedInRam(level, edits.chunkX, edits.chunkZ)) {
-                    futures.add(applyChunkToRamAsync(edits).thenApply(res -> {
-                        remainingChunkKeys.remove(key);
-                        return res;
-                    }));
-                } else {
-                    futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.chunkX, edits.chunkZ, ctx -> {
-                        for (Map.Entry<Integer, VoxelSection> secEntry : edits.wholeSections.entrySet()) {
+        } else if (!pureDiskRegions.isEmpty()) {
+            for (List<ChunkEdits> list : pureDiskRegions.values()) {
+                for (ChunkEdits edits : list) {
+                    long key = ChunkPos.asLong(edits.getChunkX(), edits.getChunkZ());
+                    futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.getChunkX(), edits.getChunkZ(), ctx -> {
+                        for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
                             ctx.setSection(secEntry.getKey(), secEntry.getValue());
                         }
-                        for (BlockMutation m : edits.mutations) {
+                        for (BlockMutation m : edits.getMutations()) {
                             int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
                             if (m.matchesFilter(curId, null)) {
                                 ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
@@ -692,7 +768,7 @@ public final class ChunkWriteBatch {
             }
         }
 
-        // 6. Aggregate all results into BatchWriteResult and deregister active batch
+        // 7. Aggregate all results into BatchWriteResult and deregister active batch
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .thenApply(v -> {
                     ACTIVE_BATCHES.remove(this);
@@ -712,9 +788,10 @@ public final class ChunkWriteBatch {
                         }
                     }
                     long duration = System.nanoTime() - startTime;
+                    int diskCount = chunkEditsMap.size() - ramChunks.size();
                     return new BatchWriteResult(
                             futures.size(), succeeded, failed,
-                            totalBlocks, ramChunks.size(), diskChunks.size(),
+                            totalBlocks, ramChunks.size(), diskCount,
                             duration, results
                     );
                 });

@@ -40,7 +40,15 @@ public record WriteResult(
     public boolean isSuccess() {
         return status == WriteStatus.SUCCESS_RAM ||
                status == WriteStatus.SUCCESS_DISK_IN_PLACE ||
-               status == WriteStatus.SUCCESS_DISK_REALLOCATED;
+               status == WriteStatus.SUCCESS_DISK_REALLOCATED ||
+               status == WriteStatus.SUCCESS_DEFERRED;
+    }
+
+    /**
+     * Convenient factory for successful deferred chunk mutations.
+     */
+    public static WriteResult successDeferred(int chunkX, int chunkZ, long durationNanos) {
+        return new WriteResult(WriteStatus.SUCCESS_DEFERRED, chunkX, chunkZ, durationNanos, 0, 0, null, true, "deferred");
     }
 
     /**

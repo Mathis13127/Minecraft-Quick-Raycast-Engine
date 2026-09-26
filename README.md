@@ -192,7 +192,7 @@ $$\vec{P}(t) = \vec{O} + t \vec{D}$$
 
 ---
 
-## In-Game Commands (`/qve`, `/raycast`, `/qre`)
+## In-Game Commands (`/qve`, `/raycast`)
 
 Quick Voxel Engine includes a full suite of in-game testing, telemetry, and world-modification commands:
 

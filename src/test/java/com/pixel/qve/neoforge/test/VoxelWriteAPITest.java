@@ -260,9 +260,10 @@ public class VoxelWriteAPITest {
         org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
 
         // Chunk (5, 5) is loaded in RAM
-        org.mockito.Mockito.when(mockCache.hasChunk(5, 5)).thenReturn(true);
+        net.minecraft.world.level.chunk.LevelChunk mockLevelChunk = org.mockito.Mockito.mock(net.minecraft.world.level.chunk.LevelChunk.class);
+        org.mockito.Mockito.when(mockCache.getChunkNow(5, 5)).thenReturn(mockLevelChunk);
         // Chunk (6, 6) is not loaded
-        org.mockito.Mockito.when(mockCache.hasChunk(6, 6)).thenReturn(false);
+        org.mockito.Mockito.when(mockCache.getChunkNow(6, 6)).thenReturn(null);
 
         ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
         BlockState stone = Blocks.STONE.defaultBlockState();
@@ -288,7 +289,7 @@ public class VoxelWriteAPITest {
         org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
 
         // Chunk (999, 999) is NOT in RAM
-        org.mockito.Mockito.when(mockCache.hasChunk(999, 999)).thenReturn(false);
+        org.mockito.Mockito.when(mockCache.getChunkNow(999, 999)).thenReturn(null);
 
         ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
         BlockState stone = Blocks.STONE.defaultBlockState();
@@ -505,12 +506,51 @@ public class VoxelWriteAPITest {
         }
 
         long posLong = ChunkPos.asLong(10, 20);
+        net.minecraft.world.level.chunk.LevelChunk mockLevelChunk = org.mockito.Mockito.mock(net.minecraft.world.level.chunk.LevelChunk.class);
+        org.mockito.Mockito.when(mockHolder.getTickingChunk()).thenReturn(mockLevelChunk);
         org.mockito.Mockito.when(mockChunkMap.getVisibleChunkIfPresent(posLong)).thenReturn(mockHolder);
 
-        // When visible in ChunkMap, isChunkLoadedInRam MUST return true
+        // When visible in ChunkMap with an active LevelChunk, isChunkLoadedInRam MUST return true
         assertTrue(ChunkExclusivityGuard.isChunkLoadedInRam(mockLevel, 10, 20));
         assertFalse(ChunkExclusivityGuard.isSafeForDirectDiskWrite(mockLevel, 10, 20));
         assertThrows(ChunkExclusivityGuard.ChunkLoadedInRamException.class,
                 () -> ChunkExclusivityGuard.assertSafeForDirectDiskWrite(mockLevel, 10, 20));
+
+        // When holder has no active LevelChunk (e.g. border chunk), it must NOT be considered resident in RAM,
+        // even if mockScc.hasChunk(10, 20) is true (e.g. border ticket in DistanceManager)
+        org.mockito.Mockito.when(mockHolder.getTickingChunk()).thenReturn(null);
+        org.mockito.Mockito.when(mockHolder.getChunkToSend()).thenReturn(null);
+        org.mockito.Mockito.when(mockHolder.getFullChunkFuture())
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(net.minecraft.server.level.ChunkHolder.UNLOADED_LEVEL_CHUNK));
+        org.mockito.Mockito.when(mockScc.hasChunk(10, 20)).thenReturn(true);
+        org.mockito.Mockito.when(mockScc.getChunkNow(10, 20)).thenReturn(null);
+        assertFalse(ChunkExclusivityGuard.isChunkLoadedInRam(mockLevel, 10, 20));
+        assertTrue(ChunkExclusivityGuard.isSafeForDirectDiskWrite(mockLevel, 10, 20));
+    }
+
+    @Test
+    @DisplayName("ChunkWriteBatch.fill() promotes fully enclosed sections to homogeneous VoxelSection in O(1)")
+    void testChunkAlignedFillAndWholeSectionPromotion() {
+        ServerLevel mockLevel = org.mockito.Mockito.mock(ServerLevel.class);
+        org.mockito.Mockito.when(mockLevel.getMinBuildHeight()).thenReturn(-64);
+        org.mockito.Mockito.when(mockLevel.getMaxBuildHeight()).thenReturn(320);
+
+        BlockState stoneState = Blocks.STONE.defaultBlockState();
+
+        ChunkWriteBatch batch = new ChunkWriteBatch(mockLevel);
+
+        // Fill an exact 16x16x16 chunk section: chunk (2, 3), section Y=0 (world Y: 0..15)
+        batch.fill(32, 0, 48, 47, 15, 63, stoneState);
+
+        assertEquals(4096, batch.getTotalBlockCount());
+        assertEquals(1, batch.getAffectedChunkCount());
+
+        ChunkWriteBatch.ChunkEdits edits = batch.getChunkEdits(2, 3);
+        assertNotNull(edits);
+        // Fully enclosed section must be promoted to wholeSections, with ZERO individual mutations
+        assertEquals(1, edits.getWholeSections().size());
+        assertTrue(edits.getWholeSections().containsKey(0));
+        assertTrue(edits.getWholeSections().get(0).isHomogeneous());
+        assertEquals(0, edits.getMutations().size());
     }
 }

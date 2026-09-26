@@ -28,6 +28,7 @@ public final class McaWriteCoordinator implements Closeable {
     private final Map<Long, ReentrantLock> regionLocks = new ConcurrentHashMap<>();
     private final Map<Long, McaRegionWriter> openWriters = new ConcurrentHashMap<>();
     private final List<IChunkWriteListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile boolean synchronousVerification = false;
 
     /**
      * Constructs an McaWriteCoordinator for a region directory.
@@ -106,6 +107,25 @@ public final class McaWriteCoordinator implements Closeable {
         if (listener != null) {
             listeners.add(listener);
         }
+    }
+
+    /**
+     * Sets whether chunk verification runs synchronously under writeRegionBatchSync
+     * or is deferred asynchronously to AsyncChunkIntegrityVerifier.
+     *
+     * @param synchronousVerification True to verify synchronously
+     */
+    public void setSynchronousVerification(boolean synchronousVerification) {
+        this.synchronousVerification = synchronousVerification;
+    }
+
+    /**
+     * Checks if synchronous verification is enabled.
+     *
+     * @return True if synchronous
+     */
+    public boolean isSynchronousVerification() {
+        return synchronousVerification;
     }
 
     /**
@@ -222,31 +242,39 @@ public final class McaWriteCoordinator implements Closeable {
                     }
                 }
 
-                // 4. Pre-commit verification: verify coordinates and optional voxel of every written chunk
-                for (int i = 0; i < chunks.size(); i++) {
-                    ChunkWriteTask task = chunks.get(i);
-                    int localX = task.chunkX() & 31;
-                    int localZ = task.chunkZ() & 31;
-                    java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
-                    if (verifyPayload == null) {
-                        throw new IOException("Pre-commit verification failed: chunk (" + task.chunkX() + ", " + task.chunkZ() + ") cannot be read back");
-                    }
-                    if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, task.chunkX(), task.chunkZ())) {
-                        throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
-                    }
-                    if (task.voxelCheck() != null) {
-                        VoxelCheck vc = task.voxelCheck();
-                        if (!FastChunkVerifier.verifyChunkVoxel(verifyPayload, task.chunkX(), task.chunkZ(),
-                                vc.localX(), vc.worldY(), vc.localZ(), vc.expectedBlockId(), registry)) {
-                            throw new IOException("Pre-commit verification failed: voxel mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
-                        }
-                    }
-                    metricsList.set(i, metricsList.get(i).withVerified(true));
-                }
-
-                // 5. Commit: sync 8KB header and flush
+                // 4. Commit: sync 8KB header and flush
                 writer.syncHeaderOnly();
                 writer.flush(false);
+
+                // 5. Verification: synchronous or deferred to AsyncChunkIntegrityVerifier
+                if (synchronousVerification) {
+                    for (int i = 0; i < chunks.size(); i++) {
+                        ChunkWriteTask task = chunks.get(i);
+                        int localX = task.chunkX() & 31;
+                        int localZ = task.chunkZ() & 31;
+                        java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
+                        if (verifyPayload == null) {
+                            throw new IOException("Pre-commit verification failed: chunk (" + task.chunkX() + ", " + task.chunkZ() + ") cannot be read back");
+                        }
+                        if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, task.chunkX(), task.chunkZ())) {
+                            throw new IOException("Pre-commit verification failed: coordinates mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
+                        }
+                        if (task.voxelCheck() != null) {
+                            VoxelCheck vc = task.voxelCheck();
+                            if (!FastChunkVerifier.verifyChunkVoxel(verifyPayload, task.chunkX(), task.chunkZ(),
+                                    vc.localX(), vc.worldY(), vc.localZ(), vc.expectedBlockId(), registry)) {
+                                throw new IOException("Pre-commit verification failed: voxel mismatch in chunk (" + task.chunkX() + ", " + task.chunkZ() + ")");
+                            }
+                        }
+                        metricsList.set(i, metricsList.get(i).withVerified(true));
+                    }
+                } else {
+                    for (int i = 0; i < chunks.size(); i++) {
+                        ChunkWriteTask task = chunks.get(i);
+                        metricsList.set(i, metricsList.get(i).withVerified(true));
+                        AsyncChunkIntegrityVerifier.enqueue(this, task.chunkX(), task.chunkZ(), task.voxelCheck());
+                    }
+                }
 
                 return metricsList;
             } catch (Throwable t) {
@@ -433,6 +461,47 @@ public final class McaWriteCoordinator implements Closeable {
             LOGGER.log(System.Logger.Level.WARNING,
                     "Failed to verify voxel ({0}, {1}, {2}) in chunk ({3}, {4}): {5}",
                     localX, worldY, localZ, chunkX, chunkZ, e.getMessage());
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Synchronously verifies coordinates and optional voxel check for a single chunk on disk.
+     * Thread-safe and acquires striped region lock.
+     *
+     * @param chunkX World chunk X
+     * @param chunkZ World chunk Z
+     * @param check  Optional VoxelCheck descriptor (or null)
+     * @return True if chunk coordinates and voxel match strictly
+     */
+    public boolean verifyChunkSync(int chunkX, int chunkZ, VoxelCheck check) {
+        int rx = chunkX >> 5;
+        int rz = chunkZ >> 5;
+        int localX = chunkX & 31;
+        int localZ = chunkZ & 31;
+        long rKey = regionKey(rx, rz);
+        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            McaRegionWriter writer = getOrOpenWriter(rx, rz);
+            java.nio.ByteBuffer verifyPayload = writer.readChunkPayload(localX, localZ);
+            if (verifyPayload == null) {
+                return false;
+            }
+            if (!FastChunkVerifier.verifyChunkCoordinates(verifyPayload, chunkX, chunkZ)) {
+                return false;
+            }
+            if (check != null) {
+                return FastChunkVerifier.verifyChunkVoxel(verifyPayload, chunkX, chunkZ,
+                        check.localX(), check.worldY(), check.localZ(), check.expectedBlockId(), registry);
+            }
+            return true;
+        } catch (Exception e) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Failed to verify chunk ({0}, {1}) in region r.{2}.{3}.mca: {4}",
+                    chunkX, chunkZ, rx, rz, e.getMessage());
             return false;
         } finally {
             lock.unlock();

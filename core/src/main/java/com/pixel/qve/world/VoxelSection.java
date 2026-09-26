@@ -238,7 +238,7 @@ public final class VoxelSection {
      * @return True if homogeneous
      */
     public boolean isHomogeneous() {
-        return isHomogeneous;
+        return isHomogeneous || (solidCount == 0);
     }
 
     /**

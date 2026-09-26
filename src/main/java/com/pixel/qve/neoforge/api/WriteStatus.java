@@ -13,6 +13,9 @@ public enum WriteStatus {
     /** Chunk was written to disk with new or relocated sectors in the MCA region file. */
     SUCCESS_DISK_REALLOCATED,
 
+    /** Chunk mutations deferred in queue for unloaded chunk in active/hybrid region. */
+    SUCCESS_DEFERRED,
+
     /** Strict disk write rejected because the target chunk is currently active or loaded in RAM. */
     FAIL_CHUNK_LOADED_IN_RAM,
 

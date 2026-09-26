@@ -161,6 +161,14 @@ public final class FastChunkNbtWriter {
             return;
         }
 
+        if (section.isHomogeneous()) {
+            // Fast-path: homogeneous single-entry palette with 0 array allocations and 0 loops (1.21.1)
+            writer.beginList(PALETTE_NAME, FastNbtReader.TAG_COMPOUND, 1);
+            writePaletteEntry(writer, section.getSingleBlockId(), registry);
+            writer.endCompound();
+            return;
+        }
+
         int[] voxelIds = section.getBlockIds();
         // Determine unique block IDs in this 4096-voxel section
         int[] uniqueIds = new int[256];

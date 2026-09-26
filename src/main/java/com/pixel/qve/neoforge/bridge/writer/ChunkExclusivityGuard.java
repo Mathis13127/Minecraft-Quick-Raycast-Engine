@@ -1,6 +1,5 @@
 package com.pixel.qve.neoforge.bridge.writer;
 
-import com.pixel.qve.neoforge.mixin.ChunkMapAccessor;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
@@ -36,27 +35,27 @@ public final class ChunkExclusivityGuard {
             if (scc == null) {
                 return false;
             }
-            // 1. Check active ticking status
-            if (scc.hasChunk(chunkX, chunkZ)) {
-                return true;
-            }
+            // 1. Direct check on Server Thread: getChunkNow returns active LevelChunk or null
             if (scc.getChunkNow(chunkX, chunkZ) != null) {
                 return true;
             }
 
-            // 2. Check full ChunkMap memory residency (border chunks, proto-chunks, and pending unloads)
+            // 2. Thread-safe check: inspect ChunkMap for visible, updating, or pending unload chunks
             ChunkMap chunkMap = scc.chunkMap;
             if (chunkMap != null) {
                 long posLong = ChunkPos.asLong(chunkX, chunkZ);
-
-                // Visible/distance-tracked chunks (volatile, O(1))
-                if (chunkMap.getVisibleChunkIfPresent(posLong) != null) {
-                    return true;
+                net.minecraft.server.level.ChunkHolder holder = chunkMap.getVisibleChunkIfPresent(posLong);
+                if (holder != null) {
+                    if (holder.getTickingChunk() != null || holder.getChunkToSend() != null) {
+                        return true;
+                    }
+                    if (holder.getFullChunkFuture().getNow(net.minecraft.server.level.ChunkHolder.UNLOADED_LEVEL_CHUNK).isSuccess()) {
+                        return true;
+                    }
                 }
 
-                // Internal updating and pending unloads maps via ChunkMapAccessor
                 try {
-                    ChunkMapAccessor accessor = (ChunkMapAccessor) chunkMap;
+                    com.pixel.qve.neoforge.mixin.ChunkMapAccessor accessor = (com.pixel.qve.neoforge.mixin.ChunkMapAccessor) chunkMap;
                     var updating = accessor.qve$getUpdatingChunkMap();
                     if (updating != null && updating.containsKey(posLong)) {
                         return true;
@@ -65,8 +64,7 @@ public final class ChunkExclusivityGuard {
                     if (unloads != null && unloads.containsKey(posLong)) {
                         return true;
                     }
-                } catch (Throwable t) {
-                    LOGGER.warn("Failed to inspect ChunkMapAccessor for chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage());
+                } catch (Throwable ignored) {
                 }
             }
             return false;
@@ -84,6 +82,88 @@ public final class ChunkExclusivityGuard {
                 }
             } catch (Throwable ignored) {
             }
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if any chunk in the region (rx, rz) is currently loaded in RAM or if Minecraft's
+     * RegionFileStorage holds an active open handle for r.rx.rz.mca.
+     * If true, this region is in a hybrid/active state and direct MCA disk writes are strictly prohibited.
+     *
+     * @param level Minecraft Level
+     * @param rx    Region X (chunkX >> 5)
+     * @param rz    Region Z (chunkZ >> 5)
+     * @return True if region has active chunks or open RegionFile handle
+     */
+    public static boolean isRegionActiveInRam(Level level, int rx, int rz) {
+        if (level == null) return false;
+
+        if (level instanceof ServerLevel serverLevel) {
+            ServerChunkCache scc = serverLevel.getChunkSource();
+            if (scc == null) return false;
+
+            ChunkMap chunkMap = scc.chunkMap;
+            if (chunkMap == null) return false;
+
+            // 1. Check if Minecraft's RegionFileStorage currently has an active open handle for this region
+            try {
+                net.minecraft.world.level.chunk.storage.IOWorker worker = ((com.pixel.qve.neoforge.mixin.ChunkStorageAccessor) chunkMap).qve$getWorker();
+                if (worker != null) {
+                    net.minecraft.world.level.chunk.storage.RegionFileStorage storage = ((com.pixel.qve.neoforge.mixin.IOWorkerAccessor) worker).qve$getStorage();
+                    if (storage != null) {
+                        var cache = ((com.pixel.qve.neoforge.mixin.RegionFileStorageAccessor) (Object) storage).qve$getRegionCache();
+                        if (cache != null) {
+                            long rKey = ChunkPos.asLong(rx, rz);
+                            synchronized (cache) {
+                                if (cache.containsKey(rKey)) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+
+            // 2. Check if any chunk tracked in visibleChunkMap, updatingChunkMap, or pendingUnloads falls in this region
+            try {
+                com.pixel.qve.neoforge.mixin.ChunkMapAccessor accessor = (com.pixel.qve.neoforge.mixin.ChunkMapAccessor) chunkMap;
+                var visible = accessor.qve$getVisibleChunkMap();
+                if (visible != null && !visible.isEmpty()) {
+                    for (long key : visible.keySet()) {
+                        int cx = ChunkPos.getX(key);
+                        int cz = ChunkPos.getZ(key);
+                        if ((cx >> 5) == rx && (cz >> 5) == rz) {
+                            return true;
+                        }
+                    }
+                }
+                var updating = accessor.qve$getUpdatingChunkMap();
+                if (updating != null && !updating.isEmpty()) {
+                    for (long key : updating.keySet()) {
+                        int cx = ChunkPos.getX(key);
+                        int cz = ChunkPos.getZ(key);
+                        if ((cx >> 5) == rx && (cz >> 5) == rz) {
+                            return true;
+                        }
+                    }
+                }
+                var unloads = accessor.qve$getPendingUnloads();
+                if (unloads != null && !unloads.isEmpty()) {
+                    for (long key : unloads.keySet()) {
+                        int cx = ChunkPos.getX(key);
+                        int cz = ChunkPos.getZ(key);
+                        if ((cx >> 5) == rx && (cz >> 5) == rz) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+
+            return false;
         }
 
         return false;

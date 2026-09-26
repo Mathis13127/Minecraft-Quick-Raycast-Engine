@@ -26,8 +26,12 @@ public final class McaRegionWriter implements Closeable {
     private static final System.Logger LOGGER = System.getLogger(McaRegionWriter.class.getName());
     private static final Pattern REGION_FILE_PATTERN = Pattern.compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca");
 
-    private static final ThreadLocal<Deflater> DEFLATER_CACHE = ThreadLocal.withInitial(() -> new Deflater(Deflater.DEFAULT_COMPRESSION, false));
+    private static volatile int configuredCompressionLevel = Deflater.BEST_SPEED;
+    private static final ThreadLocal<Deflater> DEFLATER_CACHE = ThreadLocal.withInitial(() -> new Deflater(configuredCompressionLevel, false));
     private static final ThreadLocal<byte[]> COMPRESS_TEMP_BUF = ThreadLocal.withInitial(() -> new byte[256 * 1024]);
+    private static final ThreadLocal<ByteBuffer> DEFLATED_PAYLOAD_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocate(256 * 1024));
+    private static final ThreadLocal<ByteBuffer> SECTOR_WRITE_BUF = ThreadLocal.withInitial(() -> ByteBuffer.allocate(256 * 1024));
+    private static final byte[] ZERO_SECTOR_PAD = new byte[4096];
 
     private final Path filePath;
     private final int regionX;
@@ -92,7 +96,7 @@ public final class McaRegionWriter implements Closeable {
             allocator.writeHeader(headerBuffer);
             headerBuffer.flip();
             channel.write(headerBuffer, 0);
-            channel.force(false);
+            channel.force(true);
         }
     }
 
@@ -112,6 +116,27 @@ public final class McaRegionWriter implements Closeable {
      */
     public int getRegionZ() {
         return regionZ;
+    }
+
+    /**
+     * Sets the global ZLIB compression level for Anvil chunk deflation (1 = BEST_SPEED, 9 = BEST_COMPRESSION).
+     *
+     * @param level Compression level [1..9]
+     */
+    public static void setCompressionLevel(int level) {
+        if (level < 1 || level > 9) {
+            throw new IllegalArgumentException("Compression level must be between 1 and 9, got: " + level);
+        }
+        configuredCompressionLevel = level;
+    }
+
+    /**
+     * Gets the active global ZLIB compression level.
+     *
+     * @return Compression level [1..9]
+     */
+    public static int getCompressionLevel() {
+        return configuredCompressionLevel;
     }
 
     /**
@@ -258,33 +283,30 @@ public final class McaRegionWriter implements Closeable {
         // 1. Zlib Deflation
         Deflater deflater = DEFLATER_CACHE.get();
         deflater.reset();
+        deflater.setLevel(configuredCompressionLevel);
         deflater.setInput(uncompressed, 0, uncompressed.length);
         deflater.finish();
 
         byte[] temp = COMPRESS_TEMP_BUF.get();
         int compressedLen = 0;
-        ByteBuffer deflatedBuffer = null;
+        ByteBuffer deflatedBuffer = DEFLATED_PAYLOAD_BUF.get();
+        deflatedBuffer.clear();
 
         while (!deflater.finished()) {
             int count = deflater.deflate(temp, 0, temp.length);
             if (count > 0) {
-                if (deflatedBuffer == null) {
-                    deflatedBuffer = ByteBuffer.allocate(count + 4096);
-                } else if (deflatedBuffer.remaining() < count) {
-                    ByteBuffer expanded = ByteBuffer.allocate(deflatedBuffer.capacity() * 2 + count);
+                if (deflatedBuffer.remaining() < count) {
+                    ByteBuffer expanded = ByteBuffer.allocate(Math.max(deflatedBuffer.capacity() * 2, deflatedBuffer.capacity() + count));
                     deflatedBuffer.flip();
                     expanded.put(deflatedBuffer);
+                    DEFLATED_PAYLOAD_BUF.set(expanded);
                     deflatedBuffer = expanded;
                 }
                 deflatedBuffer.put(temp, 0, count);
                 compressedLen += count;
             }
         }
-        if (deflatedBuffer != null) {
-            deflatedBuffer.flip();
-        } else {
-            deflatedBuffer = ByteBuffer.allocate(0);
-        }
+        deflatedBuffer.flip();
 
         int localIndex = localChunkX + localChunkZ * 32;
         int neededSectors = SectorAllocator.calculateNeededSectors(compressedLen);
@@ -300,13 +322,24 @@ public final class McaRegionWriter implements Closeable {
 
         // 4. Assemble chunk payload: 4 bytes length + 1 byte compressionType (2) + payload + zero padding
         int totalPayloadBytes = alloc.sectorCount() * 4096;
-        ByteBuffer writeBuffer = ByteBuffer.allocate(totalPayloadBytes);
+        ByteBuffer writeBuffer = SECTOR_WRITE_BUF.get();
+        if (writeBuffer.capacity() < totalPayloadBytes) {
+            writeBuffer = ByteBuffer.allocate(totalPayloadBytes);
+            SECTOR_WRITE_BUF.set(writeBuffer);
+        }
+        writeBuffer.clear();
         writeBuffer.putInt(compressedLen + 1); // length prefix
         writeBuffer.put((byte) 2);             // Zlib compression type
         writeBuffer.put(deflatedBuffer);
+
         // Remaining bytes up to sector boundary remain zero-padded
-        writeBuffer.position(0);
-        writeBuffer.limit(totalPayloadBytes);
+        int pad = totalPayloadBytes - writeBuffer.position();
+        while (pad > 0) {
+            int toPad = Math.min(pad, ZERO_SECTOR_PAD.length);
+            writeBuffer.put(ZERO_SECTOR_PAD, 0, toPad);
+            pad -= toPad;
+        }
+        writeBuffer.flip();
 
         // 5. Write to FileChannel
         channel.write(writeBuffer, filePos);

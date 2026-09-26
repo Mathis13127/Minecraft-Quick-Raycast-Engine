@@ -118,6 +118,29 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
             return setBlockRamAsync(pos, state, flags, blockEntityNbt);
+        } else if (ChunkExclusivityGuard.isRegionActiveInRam(level, cx >> 5, cz >> 5)) {
+            ChunkWriteBatch.ChunkEdits edits = new ChunkWriteBatch.ChunkEdits(cx, cz);
+            byte[] rawNbt = null;
+            if (blockEntityNbt != null) {
+                try {
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    net.minecraft.nbt.NbtIo.write(blockEntityNbt, new java.io.DataOutputStream(baos));
+                    rawNbt = baos.toByteArray();
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to serialize BE NBT for pos {}: {}", pos, e.getMessage());
+                }
+            }
+            edits.addMutation(new ChunkWriteBatch.BlockMutation(
+                    pos.getX(), pos.getY(), pos.getZ(),
+                    MinecraftVoxelBridge.getBlockId(state),
+                    state,
+                    rawNbt,
+                    blockEntityNbt,
+                    -1,
+                    null
+            ));
+            DeferredChunkQueue.enqueue(level, edits);
+            return CompletableFuture.completedFuture(WriteResult.successDeferred(cx, cz, 0L));
         } else {
             return setBlockDirectAsync(pos, state, blockEntityNbt);
         }
@@ -125,6 +148,8 @@ public final class MinecraftVoxelWriter implements Closeable {
 
     /**
      * Modifies or creates a chunk without concern for whether it is currently loaded in RAM or unloaded on disk.
+     * If the chunk is unloaded within an active hybrid region, mutations are queued in {@link DeferredChunkQueue}
+     * to prevent Anvil header collisions.
      *
      * @param chunkX   World chunk X
      * @param chunkZ   World chunk Z
@@ -134,6 +159,46 @@ public final class MinecraftVoxelWriter implements Closeable {
     public CompletableFuture<WriteResult> modifyChunkUnifiedAsync(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, chunkX, chunkZ)) {
             return modifyChunkRamAsync(chunkX, chunkZ, modifier);
+        } else if (ChunkExclusivityGuard.isRegionActiveInRam(level, chunkX >> 5, chunkZ >> 5)) {
+            long t0 = System.nanoTime();
+            try {
+                ChunkWriteContext context = prepareChunkContext(chunkX, chunkZ, null, null, modifier);
+                ChunkWriteBatch.ChunkEdits edits = new ChunkWriteBatch.ChunkEdits(chunkX, chunkZ);
+                int minSec = level.getMinSection();
+                int mask = context.getModifiedSectionMask();
+                for (Map.Entry<Integer, VoxelSection> secEntry : context.getSections().entrySet()) {
+                    int sy = secEntry.getKey();
+                    if ((mask & (1 << (sy - minSec))) != 0) {
+                        edits.setSection(sy, secEntry.getValue());
+                    }
+                }
+                for (Map.Entry<Long, byte[]> beEntry : context.getBlockEntities().entrySet()) {
+                    long key = beEntry.getKey();
+                    int lx = (int) (key & 0xF);
+                    int lz = (int) ((key >> 4) & 0xF);
+                    int wy = (int) ((short) (key >> 8));
+                    byte[] rawNbt = beEntry.getValue();
+                    CompoundTag tag = null;
+                    if (rawNbt != null) {
+                        try {
+                            tag = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
+                        } catch (Exception e) {
+                            LOGGER.warn("Failed to parse BE NBT in modifyChunkUnifiedAsync for ({}, {}): {}", chunkX, chunkZ, e.getMessage());
+                        }
+                    }
+                    int bId = context.getBlock(lx, wy, lz);
+                    BlockState bs = MinecraftVoxelBridge.getBlockState(bId);
+                    edits.addMutation(new ChunkWriteBatch.BlockMutation(
+                            (chunkX << 4) | lx, wy, (chunkZ << 4) | lz,
+                            bId, bs, rawNbt, tag, -1, null
+                    ));
+                }
+                DeferredChunkQueue.enqueue(level, edits);
+                return CompletableFuture.completedFuture(WriteResult.successDeferred(chunkX, chunkZ, System.nanoTime() - t0));
+            } catch (Throwable t) {
+                LOGGER.error("Failed to apply modifier to deferred chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage(), t);
+                return CompletableFuture.completedFuture(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, chunkX, chunkZ, t.getMessage()));
+            }
         } else {
             return writeChunkDirectAsync(chunkX, chunkZ, modifier);
         }
@@ -376,9 +441,11 @@ public final class MinecraftVoxelWriter implements Closeable {
                 hasOnDisk = directReader.hasChunk(localCx, localCz);
             } else if (mcaFile != null && Files.isRegularFile(mcaFile)) {
                 try {
-                    directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry());
-                    mustCloseReader = true;
-                    hasOnDisk = directReader.hasChunk(localCx, localCz);
+                    if (Files.size(mcaFile) >= 8192) {
+                        directReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry());
+                        mustCloseReader = true;
+                        hasOnDisk = directReader.hasChunk(localCx, localCz);
+                    }
                 } catch (Exception e) {
                     LOGGER.warn("Failed to check existing chunk ({}, {}) in {}: {}", chunkX, chunkZ, mcaFile, e.getMessage());
                 }
@@ -469,7 +536,9 @@ public final class MinecraftVoxelWriter implements Closeable {
             com.pixel.qve.mca.McaRegionReader sharedReader = null;
             if (mcaFile != null && Files.isRegularFile(mcaFile)) {
                 try {
-                    sharedReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry());
+                    if (Files.size(mcaFile) >= 8192) {
+                        sharedReader = new com.pixel.qve.mca.McaRegionReader(mcaFile, MinecraftVoxelBridge.getBlockRegistry());
+                    }
                 } catch (Exception e) {
                     LOGGER.warn("Failed to open shared McaRegionReader for r.{}.{}.mca: {}", rx, rz, e.getMessage());
                 }
@@ -644,57 +713,37 @@ public final class MinecraftVoxelWriter implements Closeable {
         long t0 = System.nanoTime();
         CompletableFuture<WriteResult> future = new CompletableFuture<>();
         Runnable task = () -> {
-            record AppliedRamMutation(BlockPos pos, BlockState previousState, CompoundTag previousBeNbt) {}
-            List<AppliedRamMutation> applied = new ArrayList<>();
+            List<ChunkEditsApplicator.AppliedRamMutation> applied = new ArrayList<>();
             try {
-                for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                    BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
-                    BlockState cur = level.getBlockState(pos);
-                    if (m.matchesFilter(-1, cur)) {
-                        BlockEntity oldBe = level.getBlockEntity(pos);
-                        CompoundTag oldBeNbt = (oldBe != null) ? oldBe.saveWithFullMetadata(level.registryAccess()) : null;
-                        applied.add(new AppliedRamMutation(pos, cur, oldBeNbt));
-
-                        boolean placed = level.setBlock(pos, m.targetState(), 2 | 16);
-                        if (!placed) {
-                            throw new IllegalStateException("Failed to place block in RAM at " + pos + " with state " + m.targetState());
+                LevelChunk lc = (level instanceof ServerLevel sl)
+                        ? sl.getChunkSource().getChunkNow(edits.getChunkX(), edits.getChunkZ())
+                        : level.getChunk(edits.getChunkX(), edits.getChunkZ());
+                if (lc == null) {
+                    LOGGER.warn("Chunk ({}, {}) was scheduled for RAM mutation but is no longer loaded in RAM. Falling back to direct disk write.",
+                            edits.getChunkX(), edits.getChunkZ());
+                    WriteResult diskRes = writeChunkDirectAsync(edits.getChunkX(), edits.getChunkZ(), ctx -> {
+                        for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
+                            ctx.setSection(secEntry.getKey(), secEntry.getValue());
                         }
-                        if (m.tagNbt() != null) {
-                            BlockEntity be = level.getBlockEntity(pos);
-                            if (be != null) {
-                                be.loadWithComponents(m.tagNbt(), level.registryAccess());
-                                be.setChanged();
-                            }
+                        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+                            ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, MinecraftVoxelBridge.getBlockId(m.targetState()));
                         }
-                    }
+                    }).join();
+                    future.complete(diskRes);
+                    return;
                 }
-                LevelChunk lc = level.getChunk(edits.getChunkX(), edits.getChunkZ());
-                if (lc != null) {
-                    lc.setUnsaved(true);
-                }
-                MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
-                if (grid != null) {
-                    grid.getCache().invalidateChunk(edits.getChunkX(), edits.getChunkZ());
+                if (level instanceof ServerLevel sl) {
+                    ChunkEditsApplicator.applyToLiveChunk(sl, lc, edits, applied);
+                } else {
+                    ChunkEditsApplicator.applyToLoadingChunk(lc, edits);
                 }
                 long elapsed = System.nanoTime() - t0;
                 future.complete(WriteResult.successRam(edits.getChunkX(), edits.getChunkZ(), elapsed));
             } catch (Throwable t) {
                 LOGGER.error("Error applying chunk edits in RAM for ({}, {}), rolling back: {}",
                         edits.getChunkX(), edits.getChunkZ(), t.getMessage(), t);
-                for (int i = applied.size() - 1; i >= 0; i--) {
-                    AppliedRamMutation arm = applied.get(i);
-                    try {
-                        level.setBlock(arm.pos(), arm.previousState(), 2 | 16);
-                        if (arm.previousBeNbt() != null) {
-                            BlockEntity be = level.getBlockEntity(arm.pos());
-                            if (be != null) {
-                                be.loadWithComponents(arm.previousBeNbt(), level.registryAccess());
-                                be.setChanged();
-                            }
-                        }
-                    } catch (Throwable rbEx) {
-                        LOGGER.error("Failed to rollback RAM mutation at {}: {}", arm.pos(), rbEx.getMessage());
-                    }
+                if (level instanceof ServerLevel sl) {
+                    ChunkEditsApplicator.rollback(sl, applied);
                 }
                 future.complete(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, edits.getChunkX(), edits.getChunkZ(), t.getMessage()));
             }
@@ -787,7 +836,8 @@ public final class MinecraftVoxelWriter implements Closeable {
 
                 modifier.accept(context);
 
-                // Apply modified blocks to live LevelChunk
+                // Apply modified blocks to live LevelChunk using reusable MutableBlockPos
+                BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
                 for (Map.Entry<Integer, VoxelSection> entry : context.getSections().entrySet()) {
                     int secY = entry.getKey();
                     VoxelSection voxSec = entry.getValue();
@@ -799,15 +849,13 @@ public final class MinecraftVoxelWriter implements Closeable {
                             for (int y = 0; y < 16; y++) {
                                 int blockId = voxSec.getBlockId(x, y, z);
                                 if (blockId != 0) {
-                                    BlockState bs = MinecraftVoxelBridge.getBlockRegistry().getStateDictionary().getCanonicalState(blockId) != null
-                                            ? net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(
-                                                    net.minecraft.resources.ResourceLocation.tryParse(MinecraftVoxelBridge.getBlockRegistry().getName(blockId))
-                                              ).defaultBlockState()
-                                            : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
-                                    BlockPos bPos = new BlockPos((chunkX << 4) | x, baseY + y, (chunkZ << 4) | z);
-                                    boolean placed = level.setBlock(bPos, bs, 2 | 16);
-                                    if (!placed) {
-                                        throw new IllegalStateException("Failed to place block in RAM at " + bPos + " with state " + bs);
+                                    BlockState bs = MinecraftVoxelBridge.getBlockState(blockId);
+                                    if (bs != null) {
+                                        mutPos.set((chunkX << 4) | x, baseY + y, (chunkZ << 4) | z);
+                                        boolean placed = level.setBlock(mutPos, bs, 2 | 16);
+                                        if (!placed) {
+                                            throw new IllegalStateException("Failed to place block in RAM at " + mutPos + " with state " + bs);
+                                        }
                                     }
                                 }
                             }
@@ -815,7 +863,35 @@ public final class MinecraftVoxelWriter implements Closeable {
                     }
                 }
 
+                // Apply block entities if present
+                for (Map.Entry<Long, byte[]> beEntry : context.getBlockEntities().entrySet()) {
+                    long key = beEntry.getKey();
+                    int lx = (int) (key & 0xF);
+                    int lz = (int) ((key >> 4) & 0xF);
+                    int wy = (int) ((short) (key >> 8));
+                    byte[] rawNbt = beEntry.getValue();
+                    if (rawNbt != null) {
+                        mutPos.set((chunkX << 4) | lx, wy, (chunkZ << 4) | lz);
+                        BlockEntity be = level.getBlockEntity(mutPos);
+                        if (be != null) {
+                            try {
+                                CompoundTag tag = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
+                                if (tag != null) {
+                                    be.loadWithComponents(tag, level.registryAccess());
+                                    be.setChanged();
+                                }
+                            } catch (Exception e) {
+                                LOGGER.warn("Failed to load BE NBT in modifyChunkRamAsync at {}: {}", mutPos, e.getMessage());
+                            }
+                        }
+                    }
+                }
+
                 chunk.setUnsaved(true);
+                MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
+                if (grid != null) {
+                    grid.getCache().invalidateChunk(chunkX, chunkZ);
+                }
                 long duration = System.nanoTime() - startTime;
                 future.complete(WriteResult.successRam(chunkX, chunkZ, duration));
             } catch (Throwable t) {

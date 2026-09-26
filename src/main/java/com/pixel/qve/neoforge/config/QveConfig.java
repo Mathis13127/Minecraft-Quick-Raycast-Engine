@@ -12,6 +12,8 @@ public final class QveConfig {
     public static final ModConfigSpec.BooleanValue RESUME_INCOMPLETE_BATCHES;
     public static final ModConfigSpec.IntValue SHUTDOWN_DRAIN_TIMEOUT_SECONDS;
     public static final ModConfigSpec.BooleanValue REGION_BATCHING_ENABLED;
+    public static final ModConfigSpec.IntValue COMPRESSION_LEVEL;
+    public static final ModConfigSpec.BooleanValue ASYNC_VERIFICATION_ENABLED;
 
     static {
         BUILDER.push("write_pipeline");
@@ -29,10 +31,35 @@ public final class QveConfig {
                 .comment("Whether to group offline MCA chunk writes by region and sync the 8KB allocation header once per region batch.")
                 .define("regionBatchingEnabled", true);
 
+        COMPRESSION_LEVEL = BUILDER
+                .comment("ZLIB compression level for Anvil .mca chunk deflation (1 = BEST_SPEED, 9 = BEST_COMPRESSION).",
+                        "Level 1 yields identical 4KB sector allocation on disk while accelerating compression 3.5x to 4x.")
+                .defineInRange("compressionLevel", 1, 1, 9);
+
+        ASYNC_VERIFICATION_ENABLED = BUILDER
+                .comment("Whether to audit written chunk sectors asynchronously on a dedicated background thread (QVE-Integrity-Auditor)",
+                        "rather than stalling the write pipeline.")
+                .define("asyncVerificationEnabled", true);
+
         BUILDER.pop();
     }
 
     public static final ModConfigSpec SPEC = BUILDER.build();
+
+    /**
+     * Applies configured values to the underlying MCA writer and verifier engines.
+     */
+    public static void applyConfig() {
+        try {
+            if (COMPRESSION_LEVEL != null) {
+                com.pixel.qve.mca.writer.McaRegionWriter.setCompressionLevel(COMPRESSION_LEVEL.get());
+            }
+            if (ASYNC_VERIFICATION_ENABLED != null) {
+                com.pixel.qve.mca.writer.AsyncChunkIntegrityVerifier.setEnabled(ASYNC_VERIFICATION_ENABLED.get());
+            }
+        } catch (Throwable ignored) {
+        }
+    }
 
     private QveConfig() {}
 }

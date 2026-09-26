@@ -6,8 +6,7 @@ import net.minecraft.commands.CommandSourceStack;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class QveCommandTest {
 
@@ -38,8 +37,7 @@ public class QveCommandTest {
         assertEquals(qve, raycast.getRedirect(), "Alias /raycast should redirect to /qve");
 
         var qre = dispatcher.getRoot().getChild("qre");
-        assertNotNull(qre, "Alias /qre should be registered");
-        assertEquals(qve, qre.getRedirect(), "Alias /qre should redirect to /qve");
+        assertNull(qre, "Alias /qre must NOT be registered (deprecated)");
 
         // Verify write command branch
         var write = qve.getChild("write");

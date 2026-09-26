@@ -18,6 +18,10 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 
+import com.pixel.qve.neoforge.api.ChunkWriteBatch;
+import com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -126,15 +130,58 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
 
         // 3. Fallback to offline disk provider (MCA region reader) only if not loaded in live RAM
         IVoxelWorld diskFallback = cache.getDiskFallback();
+        VoxelSection diskSection = null;
         if (diskFallback != null) {
-            VoxelSection diskSection = diskFallback.getSection(sectionX, sectionY, sectionZ);
-            if (diskSection != null) {
-                cache.putSection(sectionX, sectionY, sectionZ, diskSection);
-                return diskSection;
-            }
+            diskSection = diskFallback.getSection(sectionX, sectionY, sectionZ);
+        }
+
+        // Overlay deferred mutations from DeferredChunkQueue if present
+        if (DeferredChunkQueue.hasEdits(level, sectionX, sectionZ)) {
+            diskSection = overlayDeferredEdits(sectionX, sectionY, sectionZ, diskSection);
+        }
+
+        if (diskSection != null) {
+            cache.putSection(sectionX, sectionY, sectionZ, diskSection);
+            return diskSection;
         }
 
         return null;
+    }
+
+    private VoxelSection overlayDeferredEdits(int sectionX, int sectionY, int sectionZ, VoxelSection baseSection) {
+        ChunkWriteBatch.ChunkEdits edits = DeferredChunkQueue.peekEdits(level, sectionX, sectionZ);
+        if (edits == null) {
+            return baseSection;
+        }
+
+        VoxelSection whole = edits.getWholeSections().get(sectionY);
+        if (whole != null) {
+            return whole;
+        }
+
+        List<ChunkWriteBatch.BlockMutation> matching = null;
+        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+            if ((m.worldY() >> 4) == sectionY) {
+                if (matching == null) matching = new ArrayList<>();
+                matching.add(m);
+            }
+        }
+
+        if (matching == null || matching.isEmpty()) {
+            return baseSection;
+        }
+
+        VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
+        for (ChunkWriteBatch.BlockMutation m : matching) {
+            int lx = m.worldX() & 15;
+            int ly = m.worldY() & 15;
+            int lz = m.worldZ() & 15;
+            int curId = copy.getBlockId(lx, ly, lz);
+            if (m.matchesFilter(curId, null)) {
+                copy.setVoxel(lx, ly, lz, m.targetBlockId() != 0, m.targetBlockId());
+            }
+        }
+        return copy;
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.pixel.qve.core.test;
 
 import com.pixel.qve.mca.McaRegionReader;
+import com.pixel.qve.mca.writer.AsyncChunkIntegrityVerifier;
 import com.pixel.qve.mca.writer.McaWriteCoordinator;
 import com.pixel.qve.state.BlockIdRegistry;
 import com.pixel.qve.state.ShapeRegistry;
@@ -274,6 +275,7 @@ public class McaRoundTripTest {
         );
 
         try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            coordinator.setSynchronousVerification(true);
             var metricsList = coordinator.writeRegionBatchSync(0, 0, java.util.List.of(task));
             assertEquals(1, metricsList.size());
             assertTrue(metricsList.get(0).isVerified(), "WriteMetrics must report isVerified=true on match");
@@ -286,7 +288,17 @@ public class McaRoundTripTest {
         );
 
         try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            coordinator.setSynchronousVerification(true);
             assertThrows(IOException.class, () -> coordinator.writeRegionBatchSync(0, 0, java.util.List.of(invalidTask)));
+        }
+
+        // Test AsyncChunkIntegrityVerifier on default non-blocking async path
+        try (McaWriteCoordinator coordinator = new McaWriteCoordinator(tempDir, registry, -4, 19)) {
+            assertFalse(coordinator.isSynchronousVerification());
+            var metricsList = coordinator.writeRegionBatchSync(0, 0, java.util.List.of(task));
+            assertEquals(1, metricsList.size());
+            assertTrue(metricsList.get(0).isVerified());
+            assertTrue(AsyncChunkIntegrityVerifier.drainAndAwait(5, java.util.concurrent.TimeUnit.SECONDS));
         }
     }
 }
