@@ -33,7 +33,7 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
     private static final int L1_MASK = L1_SIZE - 1;
     private final long[] l1Keys = new long[L1_SIZE];
     private final VoxelChunkColumn[] l1Columns = new VoxelChunkColumn[L1_SIZE];
-    private final Object[] chunkLocks = new Object[L1_SIZE];
+    private final Map<Long, java.util.concurrent.CompletableFuture<VoxelChunkColumn>> inFlightLoads = new ConcurrentHashMap<>();
 
     private final Map<Long, McaRegionReader> regions = new ConcurrentHashMap<>();
     private final Map<Long, com.pixel.qve.world.RegionHeightmap2D> regionHeightmaps = new ConcurrentHashMap<>();
@@ -122,9 +122,6 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
         this.maxOpenRegions = Math.max(1, maxOpenRegions);
         this.maxCachedColumns = Math.max(16, maxCachedColumns);
         Arrays.fill(this.l1Keys, Long.MIN_VALUE);
-        for (int i = 0; i < this.chunkLocks.length; i++) {
-            this.chunkLocks[i] = new Object();
-        }
         this.nbtFetcher = new OnDemandNbtFetcher(this::getOrOpenRegion);
         scanRegionDirectoryBounds();
     }
@@ -474,14 +471,26 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
             }
         }
 
-        int lockIndex = (int) ((cKey ^ (cKey >>> 16) ^ (cKey >>> 32)) & L1_MASK);
-        synchronized (chunkLocks[lockIndex]) {
+        java.util.concurrent.CompletableFuture<VoxelChunkColumn> future = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<VoxelChunkColumn> inFlightFuture = inFlightLoads.putIfAbsent(cKey, future);
+        if (inFlightFuture != null) {
+            try {
+                inFlightFuture.join();
+            } catch (Throwable ignored) {
+            }
+            return columnCache.containsKey(cKey) ? 1 : 0;
+        }
+
+        try {
             if (columnCache.containsKey(cKey)) {
+                future.complete(columnCache.get(cKey));
                 return 0;
             }
 
             McaRegionReader reader = getOrOpenRegion(rx, rz);
             if (reader == null) {
+                loadedChunks.add(cKey);
+                future.complete(null);
                 return 0;
             }
             updateBounds(rx, rz);
@@ -508,8 +517,17 @@ public final class McaVoxelGrid implements IVoxelGrid, java.io.Closeable {
                 short colH = column.getHeightmap().getHighestY();
                 regionHeightmaps.computeIfAbsent(rKey, k -> new com.pixel.qve.world.RegionHeightmap2D())
                         .updateMax(localCx, localCz, colH);
+                future.complete(column);
+            } else {
+                loadedChunks.add(cKey);
+                future.complete(null);
             }
             return parsed;
+        } catch (Throwable t) {
+            future.completeExceptionally(t);
+            throw t;
+        } finally {
+            inFlightLoads.remove(cKey);
         }
     }
 
