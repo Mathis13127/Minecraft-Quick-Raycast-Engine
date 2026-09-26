@@ -4,6 +4,7 @@ import com.pixel.qve.neoforge.api.ChunkWriteBatch;
 import com.pixel.qve.neoforge.api.VoxelWriteAPI;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelGrid;
+import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
 import com.pixel.qve.world.VoxelSection;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.core.BlockPos;
@@ -61,8 +62,15 @@ public final class DeferredChunkQueue {
                 for (var secEntry : edits.getWholeSections().entrySet()) {
                     existing.setSection(secEntry.getKey(), secEntry.getValue());
                 }
-                for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                    existing.addMutation(m);
+                PrimitiveMutationBuffer srcBuf = edits.getMutationBuffer();
+                if (srcBuf != null && !srcBuf.isEmpty()) {
+                    for (int mi = 0, sz = srcBuf.size(); mi < sz; mi++) {
+                        existing.addMutation(srcBuf.localX(mi), srcBuf.worldY(mi), srcBuf.localZ(mi), srcBuf.targetBlockId(mi), srcBuf.filterBlockId(mi), srcBuf.rawNbt(mi));
+                    }
+                } else {
+                    for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+                        existing.addMutation(m);
+                    }
                 }
             } else {
                 map.put(key, edits);
@@ -153,11 +161,22 @@ public final class DeferredChunkQueue {
             return ws.getBlockId(x & 15, y & 15, z & 15);
         }
 
-        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
-        for (int i = mutations.size() - 1; i >= 0; i--) {
-            ChunkWriteBatch.BlockMutation m = mutations.get(i);
-            if (m.worldX() == x && m.worldY() == y && m.worldZ() == z) {
-                return m.targetBlockId();
+        PrimitiveMutationBuffer srcBuf = edits.getMutationBuffer();
+        if (srcBuf != null && !srcBuf.isEmpty()) {
+            int lx = x & 15;
+            int lz = z & 15;
+            for (int i = srcBuf.size() - 1; i >= 0; i--) {
+                if (srcBuf.localX(i) == lx && srcBuf.worldY(i) == y && srcBuf.localZ(i) == lz) {
+                    return srcBuf.targetBlockId(i);
+                }
+            }
+        } else {
+            List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
+            for (int i = mutations.size() - 1; i >= 0; i--) {
+                ChunkWriteBatch.BlockMutation m = mutations.get(i);
+                if (m.worldX() == x && m.worldY() == y && m.worldZ() == z) {
+                    return m.targetBlockId();
+                }
             }
         }
 

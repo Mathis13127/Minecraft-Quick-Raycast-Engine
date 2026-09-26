@@ -3,6 +3,7 @@ package com.pixel.qve.neoforge.bridge.writer;
 import com.pixel.qve.mca.writer.IChunkWriteContext;
 import com.pixel.qve.mca.writer.McaRegionWriter;
 import com.pixel.qve.mca.writer.McaWriteCoordinator;
+import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
 import com.pixel.qve.mca.writer.WriteOptions;
 import com.pixel.qve.neoforge.api.WriteResult;
 import com.pixel.qve.neoforge.api.WriteStatus;
@@ -559,23 +560,20 @@ public final class MinecraftVoxelWriter implements Closeable {
                 }
 
                 // Prepare VoxelMutations and BlockEntities for single-pass in-place patching
-                List<McaWriteCoordinator.VoxelMutation> voxelMutations = null;
+                PrimitiveMutationBuffer mutationBuf = edits.getMutationBuffer();
                 Map<Long, byte[]> blockEntities = null;
-                if (!edits.getMutations().isEmpty()) {
-                    voxelMutations = new ArrayList<>(edits.getMutations().size());
-                    for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                        int lx = m.worldX() & 15;
-                        int ly = m.worldY();
-                        int lz = m.worldZ() & 15;
-                        voxelMutations.add(new McaWriteCoordinator.VoxelMutation(
-                                lx, ly, lz, m.targetBlockId(), m.filterBlockId(), m.rawNbt()
-                        ));
-                        if (m.rawNbt() != null) {
+                if (mutationBuf != null && mutationBuf.hasRawNbts()) {
+                    for (int mi = 0, sz = mutationBuf.size(); mi < sz; mi++) {
+                        byte[] raw = mutationBuf.rawNbt(mi);
+                        if (raw != null) {
                             if (blockEntities == null) {
                                 blockEntities = new HashMap<>();
                             }
+                            int lx = mutationBuf.localX(mi);
+                            int ly = mutationBuf.worldY(mi);
+                            int lz = mutationBuf.localZ(mi);
                             long key = (((long) (ly & 0xFFFF)) << 8) | (((long) (lz & 0xF)) << 4) | ((long) (lx & 0xF));
-                            blockEntities.put(key, m.rawNbt());
+                            blockEntities.put(key, raw);
                         }
                     }
                 }
@@ -595,7 +593,14 @@ public final class MinecraftVoxelWriter implements Closeable {
 
                 // Prepare single-pass voxel verification target if mutations present
                 McaWriteCoordinator.VoxelCheck voxelCheck = null;
-                if (!edits.getMutations().isEmpty()) {
+                if (mutationBuf != null && !mutationBuf.isEmpty()) {
+                    voxelCheck = new McaWriteCoordinator.VoxelCheck(
+                            mutationBuf.localX(0),
+                            mutationBuf.worldY(0),
+                            mutationBuf.localZ(0),
+                            mutationBuf.targetBlockId(0)
+                    );
+                } else if (!edits.getMutations().isEmpty()) {
                     ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
                     voxelCheck = new McaWriteCoordinator.VoxelCheck(
                             firstMut.worldX() & 15,
@@ -607,7 +612,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
                 contexts.add(context);
                 tasks.add(new McaWriteCoordinator.ChunkWriteTask(
-                        cx, cz, edits.getWholeSections(), voxelMutations, blockEntities, voxelCheck
+                        cx, cz, edits.getWholeSections(), mutationBuf, blockEntities, voxelCheck
                 ));
                 diskEdits.add(edits);
             }
@@ -635,7 +640,12 @@ public final class MinecraftVoxelWriter implements Closeable {
 
                 boolean verified = m.isVerified();
                 String verifiedName = null;
-                if (!edits.getMutations().isEmpty()) {
+                PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
+                if (pmb != null && !pmb.isEmpty()) {
+                    int bId = pmb.targetBlockId(0);
+                    BlockState bs = MinecraftVoxelBridge.getBlockState(bId);
+                    verifiedName = (bs != null) ? bs.getBlock().getName().getString() : "id:" + bId;
+                } else if (!edits.getMutations().isEmpty()) {
                     ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
                     verifiedName = (firstMut.targetState() != null)
                             ? firstMut.targetState().getBlock().getName().getString()
@@ -700,8 +710,15 @@ public final class MinecraftVoxelWriter implements Closeable {
                         for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
                             ctx.setSection(secEntry.getKey(), secEntry.getValue());
                         }
-                        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-                            ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, MinecraftVoxelBridge.getBlockId(m.targetState()));
+                        PrimitiveMutationBuffer buf = edits.getMutationBuffer();
+                        if (buf != null && !buf.isEmpty()) {
+                            for (int mi = 0, sz = buf.size(); mi < sz; mi++) {
+                                ctx.setBlock(buf.localX(mi), buf.worldY(mi), buf.localZ(mi), buf.targetBlockId(mi));
+                            }
+                        } else {
+                            for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+                                ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, MinecraftVoxelBridge.getBlockId(m.targetState()));
+                            }
                         }
                     }).join();
                     future.complete(diskRes);

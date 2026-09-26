@@ -228,6 +228,28 @@ public final class FastNbtReader {
     }
 
     /**
+     * Reads an array of 64-bit longs directly into a destination buffer without heap allocations.
+     *
+     * @param buf    Byte buffer positioned at long array length prefix
+     * @param target Target array to receive long words
+     * @return Number of longs read from stream
+     */
+    public static int readLongArrayInto(ByteBuffer buf, long[] target) {
+        int count = buf.getInt();
+        if (count < 0) {
+            throw new IllegalStateException("Negative long array count: " + count);
+        }
+        int toRead = Math.min(count, target.length);
+        for (int i = 0; i < toRead; i++) {
+            target[i] = buf.getLong();
+        }
+        if (count > toRead) {
+            buf.position(buf.position() + (count - toRead) * 8);
+        }
+        return count;
+    }
+
+    /**
      * Skips the entire payload of an arbitrary NBT tag without allocating objects.
      *
      * @param buf     Byte buffer positioned immediately before tag payload

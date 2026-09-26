@@ -335,11 +335,14 @@ public final class McaRegionWriter implements Closeable {
         }
 
         // 3. Allocate sectors in .mca file
-        SectorAllocator.AllocationResult alloc = allocator.allocate(localIndex, neededSectors);
-        long filePos = (long) alloc.sectorOffset() * 4096L;
+        long allocPacked = allocator.allocatePacked(localIndex, neededSectors);
+        int sectorOffset = SectorAllocator.unpackOffset(allocPacked);
+        int sectorCount = SectorAllocator.unpackCount(allocPacked);
+        boolean isRelocated = SectorAllocator.unpackRelocated(allocPacked);
+        long filePos = (long) sectorOffset * 4096L;
 
         // 4. Assemble chunk payload: 4 bytes length + 1 byte compressionType (2) + payload + zero padding
-        int totalPayloadBytes = alloc.sectorCount() * 4096;
+        int totalPayloadBytes = sectorCount * 4096;
         ByteBuffer writeBuffer = SECTOR_WRITE_BUF.get();
         if (writeBuffer.capacity() < totalPayloadBytes) {
             writeBuffer = ByteBuffer.allocateDirect(totalPayloadBytes);
@@ -367,7 +370,7 @@ public final class McaRegionWriter implements Closeable {
             syncHeader();
         }
 
-        return new WriteMetrics(alloc.sectorOffset(), alloc.sectorCount(), compressedLen, alloc.isRelocated());
+        return new WriteMetrics(sectorOffset, sectorCount, compressedLen, isRelocated);
     }
 
     private WriteMetrics writeExternalChunk(int localChunkX, int localChunkZ, int localIndex,
@@ -386,8 +389,9 @@ public final class McaRegionWriter implements Closeable {
 
         // External header entry: sectorOffset = 0, sectorCount = 1, compressionType with flag 128
         // Allocator reserves 1 sector placeholder or external marker
-        SectorAllocator.AllocationResult alloc = allocator.allocate(localIndex, 1);
-        long filePos = (long) alloc.sectorOffset() * 4096L;
+        long allocPacked = allocator.allocatePacked(localIndex, 1);
+        int sectorOffset = SectorAllocator.unpackOffset(allocPacked);
+        long filePos = (long) sectorOffset * 4096L;
 
         ByteBuffer markerBuf = ByteBuffer.allocate(4096);
         markerBuf.putInt(1);                   // length
@@ -398,7 +402,7 @@ public final class McaRegionWriter implements Closeable {
         if (syncHeader) {
             syncHeader();
         }
-        return new WriteMetrics(alloc.sectorOffset(), 1, compressedLen, true);
+        return new WriteMetrics(sectorOffset, 1, compressedLen, true);
     }
 
     /**

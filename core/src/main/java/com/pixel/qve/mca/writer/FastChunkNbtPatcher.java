@@ -37,6 +37,8 @@ public final class FastChunkNbtPatcher {
     private static final String FULL_STATUS = "minecraft:full";
 
     private static final ThreadLocal<VoxelSection> TEMP_SECTION = ThreadLocal.withInitial(VoxelSection::new);
+    private static final ThreadLocal<int[]> PALETTE_REUSE_BUF = ThreadLocal.withInitial(() -> new int[4096]);
+    private static final ThreadLocal<long[]> DATA_REUSE_BUF = ThreadLocal.withInitial(() -> new long[1024]);
 
     private FastChunkNbtPatcher() {}
 
@@ -59,7 +61,7 @@ public final class FastChunkNbtPatcher {
                                   Map<Integer, VoxelSection> modifiedSections,
                                   Map<Long, byte[]> blockEntities,
                                   FastNbtWriter targetWriter) {
-        patchChunk(existingNbt, chunkX, chunkZ, minSectionY, maxSectionY, registry, modifiedSections, List.of(), blockEntities, targetWriter);
+        patchChunk(existingNbt, chunkX, chunkZ, minSectionY, maxSectionY, registry, modifiedSections, (PrimitiveMutationBuffer) null, blockEntities, targetWriter);
     }
 
     public static void patchChunk(ByteBuffer existingNbt, int chunkX, int chunkZ,
@@ -69,19 +71,27 @@ public final class FastChunkNbtPatcher {
                                   List<McaWriteCoordinator.VoxelMutation> mutations,
                                   Map<Long, byte[]> blockEntities,
                                   FastNbtWriter targetWriter) {
+        PrimitiveMutationBuffer buffer = null;
+        if (mutations != null && !mutations.isEmpty()) {
+            buffer = new PrimitiveMutationBuffer(mutations.size());
+            for (int i = 0, size = mutations.size(); i < size; i++) {
+                McaWriteCoordinator.VoxelMutation m = mutations.get(i);
+                buffer.add(m.localX(), m.worldY(), m.localZ(), m.targetBlockId(), m.filterBlockId(), m.rawNbt());
+            }
+        }
+        patchChunk(existingNbt, chunkX, chunkZ, minSectionY, maxSectionY, registry, wholeSections, buffer, blockEntities, targetWriter);
+    }
+
+    public static void patchChunk(ByteBuffer existingNbt, int chunkX, int chunkZ,
+                                  int minSectionY, int maxSectionY,
+                                  BlockIdRegistry registry,
+                                  Map<Integer, VoxelSection> wholeSections,
+                                  PrimitiveMutationBuffer mutations,
+                                  Map<Long, byte[]> blockEntities,
+                                  FastNbtWriter targetWriter) {
         Objects.requireNonNull(existingNbt, "existingNbt cannot be null");
         Objects.requireNonNull(targetWriter, "targetWriter cannot be null");
         Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
-
-        Map<Integer, List<McaWriteCoordinator.VoxelMutation>> mutationsBySecY = null;
-        if (mutations != null && !mutations.isEmpty()) {
-            mutationsBySecY = new HashMap<>();
-            for (int i = 0, size = mutations.size(); i < size; i++) {
-                McaWriteCoordinator.VoxelMutation m = mutations.get(i);
-                int secY = m.worldY() >> 4;
-                mutationsBySecY.computeIfAbsent(secY, k -> new ArrayList<>()).add(m);
-            }
-        }
 
         ByteBuffer buf = existingNbt.duplicate();
         if (!buf.hasRemaining()) {
@@ -135,7 +145,7 @@ public final class FastChunkNbtPatcher {
                 targetWriter.putString(STATUS_NAME, FULL_STATUS);
                 wroteStatus = true;
             } else if (tagType == FastNbtReader.TAG_LIST && FastNbtReader.matches(buf, namePos, nameLen, SECTIONS_NAME)) {
-                patchSectionsList(buf, targetWriter, wholeSections, mutationsBySecY, minSectionY, maxSectionY, registry);
+                patchSectionsList(buf, targetWriter, wholeSections, mutations, minSectionY, maxSectionY, registry);
                 wroteSections = true;
             } else if (tagType == FastNbtReader.TAG_COMPOUND && FastNbtReader.matches(buf, namePos, nameLen, HEIGHTMAPS_NAME)) {
                 FastNbtReader.skipTagPayload(buf, tagType);
@@ -181,7 +191,7 @@ public final class FastChunkNbtPatcher {
 
     private static void patchSectionsList(ByteBuffer buf, FastNbtWriter writer,
                                           Map<Integer, VoxelSection> wholeSections,
-                                          Map<Integer, List<McaWriteCoordinator.VoxelMutation>> mutationsBySecY,
+                                          PrimitiveMutationBuffer mutations,
                                           int minSectionY, int maxSectionY,
                                           BlockIdRegistry registry) {
         byte elemType = buf.get();
@@ -236,16 +246,20 @@ public final class FastChunkNbtPatcher {
                 boolean exists = (bit >= 0 && bit < 64) && ((existingYMask & (1L << bit)) != 0L);
                 if (secY >= minSectionY && secY <= maxSectionY && !exists) {
                     newlyAddedCount++;
+                    existingYMask |= (1L << bit);
                 }
             }
         }
-        if (mutationsBySecY != null) {
-            for (int secY : mutationsBySecY.keySet()) {
+        int mutationsMask = (mutations != null) ? mutations.getModifiedSectionMask() : 0;
+        if (mutations != null && !mutations.isEmpty()) {
+            for (int i = 0, size = mutations.size(); i < size; i++) {
+                int secY = mutations.sectionY(i);
                 if (wholeSections != null && wholeSections.containsKey(secY)) continue;
                 int bit = secY + 16;
                 boolean exists = (bit >= 0 && bit < 64) && ((existingYMask & (1L << bit)) != 0L);
                 if (secY >= minSectionY && secY <= maxSectionY && !exists) {
                     newlyAddedCount++;
+                    existingYMask |= (1L << bit);
                 }
             }
         }
@@ -278,10 +292,12 @@ public final class FastChunkNbtPatcher {
                     if (secY != Integer.MIN_VALUE && wholeSections != null && wholeSections.containsKey(secY)) {
                         FastNbtReader.skipTagPayload(buf, childType);
                         FastChunkNbtWriter.writeSectionBlockStates(writer, wholeSections.get(secY), registry);
-                    } else if (secY != Integer.MIN_VALUE && mutationsBySecY != null && mutationsBySecY.containsKey(secY)) {
-                        // Section has mutations: parse palette & data in-place, modify, and stream updated block_states
-                        int[] paletteIds = null;
-                        long[] data = null;
+                    } else if (secY != Integer.MIN_VALUE && mutations != null && (secY + 16 >= 0 && secY + 16 < 32) && ((mutationsMask & (1 << (secY + 16))) != 0)) {
+                        // Section has mutations: parse palette & data in-place using reusable pools, modify, and stream updated block_states
+                        int pCount = 0;
+                        int dCount = 0;
+                        int[] paletteBuf = PALETTE_REUSE_BUF.get();
+                        long[] dataBuf = DATA_REUSE_BUF.get();
                         while (true) {
                             byte bsType = buf.get();
                             if (bsType == FastNbtReader.TAG_END) break;
@@ -290,30 +306,36 @@ public final class FastChunkNbtPatcher {
                             buf.position(bsNamePos + bsNameLen);
                             if (FastNbtReader.matches(buf, bsNamePos, bsNameLen, PALETTE_NAME) && bsType == FastNbtReader.TAG_LIST) {
                                 buf.get(); // elemType
-                                int pCount = buf.getInt();
-                                paletteIds = new int[pCount];
+                                pCount = buf.getInt();
+                                if (pCount > paletteBuf.length) {
+                                    paletteBuf = new int[Math.max(pCount, paletteBuf.length * 2)];
+                                    PALETTE_REUSE_BUF.set(paletteBuf);
+                                }
                                 for (int pi = 0; pi < pCount; pi++) {
-                                    paletteIds[pi] = parsePaletteEntry(buf, registry);
+                                    paletteBuf[pi] = parsePaletteEntry(buf, registry);
                                 }
                             } else if (FastNbtReader.matches(buf, bsNamePos, bsNameLen, DATA_NAME) && bsType == FastNbtReader.TAG_LONG_ARRAY) {
-                                data = FastNbtReader.readLongArray(buf);
+                                dCount = FastNbtReader.readLongArrayInto(buf, dataBuf);
                             } else {
                                 FastNbtReader.skipTagPayload(buf, bsType);
                             }
                         }
 
                         VoxelSection tempSec = TEMP_SECTION.get();
-                        if (paletteIds != null && paletteIds.length > 0) {
-                            BlockStatePaletteUnpacker.unpackInto(paletteIds, data, tempSec);
+                        if (pCount > 0) {
+                            BlockStatePaletteUnpacker.unpackInto(paletteBuf, pCount, dataBuf, dCount, tempSec, null);
                         } else {
                             tempSec.clear();
                         }
-                        List<McaWriteCoordinator.VoxelMutation> secMuts = mutationsBySecY.get(secY);
-                        for (int mi = 0, mSize = secMuts.size(); mi < mSize; mi++) {
-                            McaWriteCoordinator.VoxelMutation m = secMuts.get(mi);
-                            int curId = tempSec.getBlockId(m.localX(), m.worldY() & 15, m.localZ());
-                            if (m.matchesFilter(curId)) {
-                                tempSec.setBlock(m.localX(), m.worldY() & 15, m.localZ(), m.targetBlockId());
+                        for (int mi = 0, mSize = mutations.size(); mi < mSize; mi++) {
+                            if (mutations.sectionY(mi) == secY) {
+                                int lx = mutations.localX(mi);
+                                int ly = mutations.worldY(mi) & 15;
+                                int lz = mutations.localZ(mi);
+                                int curId = tempSec.getBlockId(lx, ly, lz);
+                                if (mutations.matchesFilter(mi, curId)) {
+                                    tempSec.setBlock(lx, ly, lz, mutations.targetBlockId(mi));
+                                }
                             }
                         }
                         FastChunkNbtWriter.writeSectionBlockStates(writer, tempSec, registry);
@@ -341,14 +363,12 @@ public final class FastChunkNbtPatcher {
             if (!hasBlockStates && secY != Integer.MIN_VALUE) {
                 if (wholeSections != null && wholeSections.containsKey(secY)) {
                     FastChunkNbtWriter.writeSectionBlockStates(writer, wholeSections.get(secY), registry);
-                } else if (mutationsBySecY != null && mutationsBySecY.containsKey(secY)) {
+                } else if (mutations != null && (secY + 16 >= 0 && secY + 16 < 32) && ((mutationsMask & (1 << (secY + 16))) != 0)) {
                     VoxelSection tempSec = TEMP_SECTION.get();
                     tempSec.clear();
-                    List<McaWriteCoordinator.VoxelMutation> secMuts = mutationsBySecY.get(secY);
-                    for (int mi = 0, mSize = secMuts.size(); mi < mSize; mi++) {
-                        McaWriteCoordinator.VoxelMutation m = secMuts.get(mi);
-                        if (m.matchesFilter(0)) {
-                            tempSec.setBlock(m.localX(), m.worldY() & 15, m.localZ(), m.targetBlockId());
+                    for (int mi = 0, mSize = mutations.size(); mi < mSize; mi++) {
+                        if (mutations.sectionY(mi) == secY && mutations.matchesFilter(mi, 0)) {
+                            tempSec.setBlock(mutations.localX(mi), mutations.worldY(mi) & 15, mutations.localZ(mi), mutations.targetBlockId(mi));
                         }
                     }
                     FastChunkNbtWriter.writeSectionBlockStates(writer, tempSec, registry);
@@ -361,7 +381,7 @@ public final class FastChunkNbtPatcher {
             writer.endCompound();
         }
 
-        // Add brand new sections that did not previously exist
+        // Pass 3: Add brand new sections that did not previously exist
         if (wholeSections != null && newlyAddedCount > 0) {
             for (Map.Entry<Integer, VoxelSection> entry : wholeSections.entrySet()) {
                 int secY = entry.getKey();
@@ -376,27 +396,29 @@ public final class FastChunkNbtPatcher {
                 }
             }
         }
-        if (mutationsBySecY != null) {
-            for (Map.Entry<Integer, List<McaWriteCoordinator.VoxelMutation>> entry : mutationsBySecY.entrySet()) {
-                int secY = entry.getKey();
+        if (mutations != null && newlyAddedCount > 0) {
+            long handledNewSecs = 0L;
+            for (int i = 0, size = mutations.size(); i < size; i++) {
+                int secY = mutations.sectionY(i);
                 if (wholeSections != null && wholeSections.containsKey(secY)) continue;
                 int bit = secY + 16;
                 boolean exists = (bit >= 0 && bit < 64) && ((existingYMask & (1L << bit)) != 0L);
                 if (secY >= minSectionY && secY <= maxSectionY && !exists) {
-                    writer.beginListCompound();
-                    writer.putByte(Y_NAME, (byte) secY);
-                    VoxelSection tempSec = TEMP_SECTION.get();
-                    tempSec.clear();
-                    List<McaWriteCoordinator.VoxelMutation> secMuts = entry.getValue();
-                    for (int mi = 0, mSize = secMuts.size(); mi < mSize; mi++) {
-                        McaWriteCoordinator.VoxelMutation m = secMuts.get(mi);
-                        if (m.matchesFilter(0)) {
-                            tempSec.setBlock(m.localX(), m.worldY() & 15, m.localZ(), m.targetBlockId());
+                    if ((handledNewSecs & (1L << bit)) == 0L) {
+                        handledNewSecs |= (1L << bit);
+                        writer.beginListCompound();
+                        writer.putByte(Y_NAME, (byte) secY);
+                        VoxelSection tempSec = TEMP_SECTION.get();
+                        tempSec.clear();
+                        for (int mi = 0; mi < size; mi++) {
+                            if (mutations.sectionY(mi) == secY && mutations.matchesFilter(mi, 0)) {
+                                tempSec.setBlock(mutations.localX(mi), mutations.worldY(mi) & 15, mutations.localZ(mi), mutations.targetBlockId(mi));
+                            }
                         }
+                        FastChunkNbtWriter.writeSectionBlockStates(writer, tempSec, registry);
+                        FastChunkNbtWriter.writeSectionBiomes(writer, "minecraft:plains");
+                        writer.endCompound();
                     }
-                    FastChunkNbtWriter.writeSectionBlockStates(writer, tempSec, registry);
-                    FastChunkNbtWriter.writeSectionBiomes(writer, "minecraft:plains");
-                    writer.endCompound();
                 }
             }
         }

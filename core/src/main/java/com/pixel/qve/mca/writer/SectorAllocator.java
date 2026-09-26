@@ -89,7 +89,36 @@ public final class SectorAllocator {
      * @param neededSectors Number of sectors required (1..255)
      * @return AllocationResult with sectorOffset and sectorCount
      */
-    public AllocationResult allocate(int localIndex, int neededSectors) {
+    /**
+     * Packs sector allocation metadata into a single 64-bit primitive scalar:
+     * Bits 32..63: sectorOffset, Bits 16..31: sectorCount, Bit 0: isRelocated.
+     */
+    public static long packAllocation(int sectorOffset, int sectorCount, boolean isRelocated) {
+        return (((long) sectorOffset & 0xFFFFFFL) << 32)
+                | (((long) sectorCount & 0xFFFFL) << 16)
+                | (isRelocated ? 1L : 0L);
+    }
+
+    public static int unpackOffset(long packed) {
+        return (int) ((packed >>> 32) & 0xFFFFFFL);
+    }
+
+    public static int unpackCount(long packed) {
+        return (int) ((packed >>> 16) & 0xFFFFL);
+    }
+
+    public static boolean unpackRelocated(long packed) {
+        return (packed & 1L) != 0L;
+    }
+
+    /**
+     * Allocates sectors returning a packed 64-bit primitive long to eliminate heap allocations.
+     *
+     * @param localIndex    Local chunk index (localX + localZ * 32)
+     * @param neededSectors Number of sectors required (1..255)
+     * @return Packed 64-bit long (use unpackOffset, unpackCount, unpackRelocated)
+     */
+    public long allocatePacked(int localIndex, int neededSectors) {
         if (localIndex < 0 || localIndex >= CHUNKS_PER_REGION) {
             throw new IndexOutOfBoundsException("localIndex must be in 0..1023, got: " + localIndex);
         }
@@ -109,7 +138,7 @@ public final class SectorAllocator {
             }
             locations[localIndex] = (oldOffset << 8) | neededSectors;
             timestamps[localIndex] = (int) (System.currentTimeMillis() / 1000L);
-            return new AllocationResult(oldOffset, neededSectors, false);
+            return packAllocation(oldOffset, neededSectors, false);
         }
 
         // Case 2: Must reallocate or allocate new
@@ -129,7 +158,19 @@ public final class SectorAllocator {
         locations[localIndex] = (targetOffset << 8) | neededSectors;
         timestamps[localIndex] = (int) (System.currentTimeMillis() / 1000L);
 
-        return new AllocationResult(targetOffset, neededSectors, true);
+        return packAllocation(targetOffset, neededSectors, true);
+    }
+
+    /**
+     * Allocates sectors for a chunk payload, returning an AllocationResult record (backward-compatible).
+     *
+     * @param localIndex    Local chunk index (localX + localZ * 32)
+     * @param neededSectors Number of sectors required (1..255)
+     * @return AllocationResult with sectorOffset and sectorCount
+     */
+    public AllocationResult allocate(int localIndex, int neededSectors) {
+        long packed = allocatePacked(localIndex, neededSectors);
+        return new AllocationResult(unpackOffset(packed), unpackCount(packed), unpackRelocated(packed));
     }
 
     private int findContiguousHole(int count) {

@@ -18,6 +18,7 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 
+import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
 import com.pixel.qve.neoforge.api.ChunkWriteBatch;
 import com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue;
 import java.util.ArrayList;
@@ -157,6 +158,28 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
         VoxelSection whole = edits.getWholeSections().get(sectionY);
         if (whole != null) {
             return whole;
+        }
+
+        PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
+        if (pmb != null && !pmb.isEmpty()) {
+            int bit = sectionY + 16;
+            if (bit >= 0 && bit < 32 && (pmb.getModifiedSectionMask() & (1 << bit)) == 0) {
+                return baseSection;
+            }
+            VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
+            for (int i = 0, size = pmb.size(); i < size; i++) {
+                if (pmb.sectionY(i) == sectionY) {
+                    int lx = pmb.localX(i);
+                    int ly = pmb.worldY(i) & 15;
+                    int lz = pmb.localZ(i);
+                    int curId = copy.getBlockId(lx, ly, lz);
+                    if (pmb.matchesFilter(i, curId)) {
+                        int targetId = pmb.targetBlockId(i);
+                        copy.setVoxel(lx, ly, lz, targetId != 0, targetId);
+                    }
+                }
+            }
+            return copy;
         }
 
         List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();

@@ -20,6 +20,11 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.util.*;
@@ -44,8 +49,8 @@ public final class ChunkWriteBatch {
     }
 
     private final Level level;
-    private final Map<Long, ChunkEdits> chunkEditsMap = new LinkedHashMap<>();
-    private final Set<Long> remainingChunkKeys = Collections.synchronizedSet(new HashSet<>());
+    private final Long2ObjectLinkedOpenHashMap<ChunkEdits> chunkEditsMap = new Long2ObjectLinkedOpenHashMap<>();
+    private final LongOpenHashSet remainingChunkKeys = new LongOpenHashSet();
     private volatile WriteOptions activeOptions = WriteOptions.DEFAULT;
     private int totalBlockCount = 0;
 
@@ -72,7 +77,7 @@ public final class ChunkWriteBatch {
             if (remainingChunkKeys.isEmpty() && !ACTIVE_BATCHES.contains(this) && !chunkEditsMap.isEmpty()) {
                 return new ArrayList<>(chunkEditsMap.values());
             }
-            for (Long key : remainingChunkKeys) {
+            for (long key : remainingChunkKeys) {
                 ChunkEdits edits = chunkEditsMap.get(key);
                 if (edits != null) {
                     list.add(edits);
@@ -169,8 +174,9 @@ public final class ChunkWriteBatch {
     public static final class ChunkEdits {
         private final int chunkX;
         private final int chunkZ;
-        private final List<BlockMutation> mutations = new ArrayList<>();
+        private final PrimitiveMutationBuffer mutationBuffer = new PrimitiveMutationBuffer();
         private final Map<Integer, VoxelSection> wholeSections = new HashMap<>();
+        private List<BlockMutation> legacyMutations = null;
 
         public ChunkEdits(int chunkX, int chunkZ) {
             this.chunkX = chunkX;
@@ -185,16 +191,55 @@ public final class ChunkWriteBatch {
             return chunkZ;
         }
 
+        public PrimitiveMutationBuffer getMutationBuffer() {
+            return mutationBuffer;
+        }
+
         public List<BlockMutation> getMutations() {
-            return mutations;
+            if (legacyMutations == null) {
+                if (mutationBuffer.isEmpty()) {
+                    return Collections.emptyList();
+                }
+                legacyMutations = new ArrayList<>(mutationBuffer.size());
+                int chunkBaseX = chunkX << 4;
+                int chunkBaseZ = chunkZ << 4;
+                for (int i = 0, sz = mutationBuffer.size(); i < sz; i++) {
+                    int lx = mutationBuffer.localX(i);
+                    int wy = mutationBuffer.worldY(i);
+                    int lz = mutationBuffer.localZ(i);
+                    int targetId = mutationBuffer.targetBlockId(i);
+                    int filterId = mutationBuffer.filterBlockId(i);
+                    byte[] raw = mutationBuffer.rawNbt(i);
+                    BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
+                    BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
+                    legacyMutations.add(new BlockMutation(
+                            chunkBaseX | lx, wy, chunkBaseZ | lz,
+                            targetId, targetState,
+                            raw, null,
+                            filterId, filterState
+                    ));
+                }
+            }
+            return legacyMutations;
         }
 
         public Map<Integer, VoxelSection> getWholeSections() {
             return wholeSections;
         }
 
+        public void addMutation(int localX, int worldY, int localZ, int targetBlockId, int filterBlockId, byte[] rawNbt) {
+            mutationBuffer.add(localX, worldY, localZ, targetBlockId, filterBlockId, rawNbt);
+            legacyMutations = null;
+        }
+
         public void addMutation(BlockMutation mutation) {
-            mutations.add(mutation);
+            int lx = mutation.worldX() & 15;
+            int ly = mutation.worldY();
+            int lz = mutation.worldZ() & 15;
+            mutationBuffer.add(lx, ly, lz, mutation.targetBlockId(), mutation.filterBlockId(), mutation.rawNbt());
+            if (legacyMutations != null) {
+                legacyMutations.add(mutation);
+            }
         }
 
         public void setSection(int sectionY, VoxelSection section) {
@@ -213,7 +258,9 @@ public final class ChunkWriteBatch {
 
     private ChunkEdits getOrCreateChunkEdits(int chunkX, int chunkZ) {
         long key = (((long) chunkX) << 32) | (chunkZ & 0xFFFFFFFFL);
-        remainingChunkKeys.add(key);
+        synchronized (remainingChunkKeys) {
+            remainingChunkKeys.add(key);
+        }
         return chunkEditsMap.computeIfAbsent(key, k -> new ChunkEdits(chunkX, chunkZ));
     }
 
@@ -320,7 +367,7 @@ public final class ChunkWriteBatch {
         }
 
         ChunkEdits edits = getOrCreateChunkEdits(cx, cz);
-        edits.addMutation(new BlockMutation(x, y, z, blockId, state, rawNbt, blockEntityNbt, filterBlockId, filterState));
+        edits.addMutation(x & 15, y, z & 15, blockId, filterBlockId, rawNbt);
         totalBlockCount++;
         return this;
     }
@@ -433,7 +480,7 @@ public final class ChunkWriteBatch {
                         for (int y = sMinY; y <= sMaxY; y++) {
                             for (int z = cMinZ; z <= cMaxZ; z++) {
                                 for (int x = cMinX; x <= cMaxX; x++) {
-                                    edits.addMutation(new BlockMutation(x, y, z, blockId, state, null, null, filterId, replaceFilter));
+                                    edits.addMutation(x & 15, y, z & 15, blockId, filterId, null);
                                     totalBlockCount++;
                                 }
                             }
@@ -501,14 +548,18 @@ public final class ChunkWriteBatch {
             int cz = edits.getChunkZ();
 
             // 1. Validate coordinate heights
-            for (BlockMutation m : edits.getMutations()) {
-                if (m.worldY() < worldMinY || m.worldY() > worldMaxY) {
-                    return Optional.of(WriteResult.failure(
-                            WriteStatus.FAIL_INVALID_COORDINATES,
-                            cx, cz,
-                            String.format("Block mutation at (%d, %d, %d) Y=%d is outside world bounds [%d..%d]",
-                                    m.worldX(), m.worldY(), m.worldZ(), m.worldY(), worldMinY, worldMaxY)
-                    ));
+            PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
+            if (pmb != null && !pmb.isEmpty()) {
+                for (int i = 0, sz = pmb.size(); i < sz; i++) {
+                    int wy = pmb.worldY(i);
+                    if (wy < worldMinY || wy > worldMaxY) {
+                        return Optional.of(WriteResult.failure(
+                                WriteStatus.FAIL_INVALID_COORDINATES,
+                                cx, cz,
+                                String.format("Block mutation at local (%d, %d, %d) Y=%d is outside world bounds [%d..%d]",
+                                        pmb.localX(i), wy, pmb.localZ(i), wy, worldMinY, worldMaxY)
+                        ));
+                    }
                 }
             }
 
@@ -607,10 +658,10 @@ public final class ChunkWriteBatch {
         // 3. Partition chunks into RAM, Deferred (unloaded in hybrid/active region), and Pure Disk pools
         List<ChunkEdits> ramChunks = new ArrayList<>();
         List<ChunkEdits> deferredChunks = new ArrayList<>();
-        Map<Long, List<ChunkEdits>> pureDiskRegions = new LinkedHashMap<>();
+        Long2ObjectLinkedOpenHashMap<List<ChunkEdits>> pureDiskRegions = new Long2ObjectLinkedOpenHashMap<>();
 
         // Group by region first to check region activity once per region
-        Map<Long, List<ChunkEdits>> byRegion = new LinkedHashMap<>();
+        Long2ObjectLinkedOpenHashMap<List<ChunkEdits>> byRegion = new Long2ObjectLinkedOpenHashMap<>();
         for (ChunkEdits edits : sortedChunks) {
             int rx = edits.getChunkX() >> 5;
             int rz = edits.getChunkZ() >> 5;
@@ -618,8 +669,8 @@ public final class ChunkWriteBatch {
             byRegion.computeIfAbsent(rKey, k -> new ArrayList<>()).add(edits);
         }
 
-        for (Map.Entry<Long, List<ChunkEdits>> entry : byRegion.entrySet()) {
-            long rKey = entry.getKey();
+        for (Long2ObjectMap.Entry<List<ChunkEdits>> entry : byRegion.long2ObjectEntrySet()) {
+            long rKey = entry.getLongKey();
             int rx = ChunkPos.getX(rKey);
             int rz = ChunkPos.getZ(rKey);
             List<ChunkEdits> chunkList = entry.getValue();
@@ -642,7 +693,7 @@ public final class ChunkWriteBatch {
             }
         }
 
-        List<CompletableFuture<WriteResult>> futures = new ArrayList<>(chunkEditsMap.size());
+        List<CompletableFuture<List<WriteResult>>> batchFutures = new ArrayList<>();
 
         // 4. Dispatch RAM chunks on server thread
         if (!ramChunks.isEmpty()) {
@@ -697,30 +748,31 @@ public final class ChunkWriteBatch {
                 ramTask.run();
             }
 
-            for (int i = 0; i < ramChunks.size(); i++) {
-                final int idx = i;
-                final ChunkEdits ce = ramChunks.get(i);
-                futures.add(ramFuture.thenApply(list -> {
-                    WriteResult res = list.get(idx);
-                    long key = ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ());
-                    remainingChunkKeys.remove(key);
-                    return res;
-                }));
-            }
+            batchFutures.add(ramFuture.thenApply(list -> {
+                synchronized (remainingChunkKeys) {
+                    for (ChunkEdits ce : ramChunks) {
+                        remainingChunkKeys.remove(ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ()));
+                    }
+                }
+                return list;
+            }));
         }
 
         // 5. Enqueue Deferred chunks for hybrid regions
-        for (ChunkEdits edits : deferredChunks) {
-            long t0 = System.nanoTime();
-            DeferredChunkQueue.enqueue(level, edits);
-            long key = ChunkPos.asLong(edits.getChunkX(), edits.getChunkZ());
-            long elapsed = System.nanoTime() - t0;
-            futures.add(CompletableFuture.completedFuture(
-                    WriteResult.successDeferred(edits.getChunkX(), edits.getChunkZ(), elapsed)
-            ).thenApply(res -> {
-                remainingChunkKeys.remove(key);
-                return res;
-            }));
+        if (!deferredChunks.isEmpty()) {
+            List<WriteResult> defResults = new ArrayList<>(deferredChunks.size());
+            for (ChunkEdits edits : deferredChunks) {
+                long t0 = System.nanoTime();
+                DeferredChunkQueue.enqueue(level, edits);
+                long elapsed = System.nanoTime() - t0;
+                defResults.add(WriteResult.successDeferred(edits.getChunkX(), edits.getChunkZ(), elapsed));
+            }
+            synchronized (remainingChunkKeys) {
+                for (ChunkEdits edits : deferredChunks) {
+                    remainingChunkKeys.remove(ChunkPos.asLong(edits.getChunkX(), edits.getChunkZ()));
+                }
+            }
+            batchFutures.add(CompletableFuture.completedFuture(defResults));
         }
 
         // 6. Dispatch Pure Disk regions via Region-Batching if enabled
@@ -730,7 +782,7 @@ public final class ChunkWriteBatch {
         if (writer != null && useRegionBatching && !pureDiskRegions.isEmpty()) {
             if (level instanceof ServerLevel sl) {
                 List<Long> cachedKeys = new ArrayList<>();
-                for (Long rKey : pureDiskRegions.keySet()) {
+                for (long rKey : pureDiskRegions.keySet()) {
                     int rx = ChunkPos.getX(rKey);
                     int rz = ChunkPos.getZ(rKey);
                     if (MinecraftRegionFileBridge.isRegionCached(sl, rx, rz)) {
@@ -742,73 +794,95 @@ public final class ChunkWriteBatch {
                 }
             }
 
-            for (Map.Entry<Long, List<ChunkEdits>> entry : pureDiskRegions.entrySet()) {
-                long rKey = entry.getKey();
+            for (Long2ObjectMap.Entry<List<ChunkEdits>> entry : pureDiskRegions.long2ObjectEntrySet()) {
+                long rKey = entry.getLongKey();
                 int rx = ChunkPos.getX(rKey);
                 int rz = ChunkPos.getZ(rKey);
                 List<ChunkEdits> regionChunks = entry.getValue();
 
                 CompletableFuture<List<WriteResult>> regFuture = writer.writeRegionBatchAsync(rx, rz, regionChunks, opts);
-                for (int i = 0; i < regionChunks.size(); i++) {
-                    final int idx = i;
-                    final ChunkEdits ce = regionChunks.get(i);
-                    futures.add(regFuture.thenApply(list -> {
-                        WriteResult res = (idx < list.size()) ? list.get(idx)
-                                : WriteResult.failure(WriteStatus.FAIL_IO_ERROR, ce.getChunkX(), ce.getChunkZ(), "Missing region batch result");
-                        long key = ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ());
-                        remainingChunkKeys.remove(key);
-                        return res;
-                    }));
-                }
+                batchFutures.add(regFuture.thenApply(list -> {
+                    synchronized (remainingChunkKeys) {
+                        for (ChunkEdits ce : regionChunks) {
+                            remainingChunkKeys.remove(ChunkPos.asLong(ce.getChunkX(), ce.getChunkZ()));
+                        }
+                    }
+                    return list;
+                }));
             }
         } else if (!pureDiskRegions.isEmpty()) {
             for (List<ChunkEdits> list : pureDiskRegions.values()) {
+                List<CompletableFuture<WriteResult>> chunkFutures = new ArrayList<>(list.size());
                 for (ChunkEdits edits : list) {
                     long key = ChunkPos.asLong(edits.getChunkX(), edits.getChunkZ());
-                    futures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.getChunkX(), edits.getChunkZ(), ctx -> {
+                    chunkFutures.add(VoxelWriteAPI.writeChunkDirectAsync(level, edits.getChunkX(), edits.getChunkZ(), ctx -> {
                         for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
                             ctx.setSection(secEntry.getKey(), secEntry.getValue());
                         }
-                        for (BlockMutation m : edits.getMutations()) {
-                            int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
-                            if (m.matchesFilter(curId, null)) {
-                                ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
-                                if (m.rawNbt() != null) {
-                                    ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+                        PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
+                        if (pmb != null && !pmb.isEmpty()) {
+                            for (int mi = 0, sz = pmb.size(); mi < sz; mi++) {
+                                int curId = ctx.getBlock(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi));
+                                if (pmb.matchesFilter(mi, curId)) {
+                                    ctx.setBlock(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi), pmb.targetBlockId(mi));
+                                    if (pmb.hasNbt(mi)) {
+                                        ctx.setBlockEntityRaw(pmb.localX(mi), pmb.worldY(mi), pmb.localZ(mi), pmb.rawNbt(mi));
+                                    }
+                                }
+                            }
+                        } else {
+                            for (BlockMutation m : edits.getMutations()) {
+                                int curId = ctx.getBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15);
+                                if (m.matchesFilter(curId, null)) {
+                                    ctx.setBlock(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.targetBlockId());
+                                    if (m.rawNbt() != null) {
+                                        ctx.setBlockEntityRaw(m.worldX() & 15, m.worldY(), m.worldZ() & 15, m.rawNbt());
+                                    }
                                 }
                             }
                         }
                     }, opts).thenApply(res -> {
-                        remainingChunkKeys.remove(key);
+                        synchronized (remainingChunkKeys) {
+                            remainingChunkKeys.remove(key);
+                        }
                         return res;
                     }));
                 }
+                batchFutures.add(CompletableFuture.allOf(chunkFutures.toArray(new CompletableFuture[0])).thenApply(v -> {
+                    List<WriteResult> resList = new ArrayList<>(chunkFutures.size());
+                    for (CompletableFuture<WriteResult> cf : chunkFutures) {
+                        resList.add(cf.join());
+                    }
+                    return resList;
+                }));
             }
         }
 
         // 7. Aggregate all results into BatchWriteResult and deregister active batch
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+        return CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]))
                 .thenApply(v -> {
                     ACTIVE_BATCHES.remove(this);
                     synchronized (remainingChunkKeys) {
                         remainingChunkKeys.clear();
                     }
-                    List<WriteResult> results = new ArrayList<>(futures.size());
+                    List<WriteResult> results = new ArrayList<>(chunkEditsMap.size());
                     int succeeded = 0;
                     int failed = 0;
-                    for (CompletableFuture<WriteResult> f : futures) {
-                        WriteResult res = f.join();
-                        results.add(res);
-                        if (res.isSuccess()) {
-                            succeeded++;
-                        } else {
-                            failed++;
+                    for (CompletableFuture<List<WriteResult>> f : batchFutures) {
+                        List<WriteResult> list = f.join();
+                        for (WriteResult res : list) {
+                            results.add(res);
+                            if (res.isSuccess()) {
+                                succeeded++;
+                            } else {
+                                failed++;
+                            }
                         }
                     }
                     long duration = System.nanoTime() - startTime;
                     int diskCount = chunkEditsMap.size() - ramChunks.size();
                     return new BatchWriteResult(
-                            futures.size(), succeeded, failed,
+                            results.size(), succeeded, failed,
                             totalBlocks, ramChunks.size(), diskCount,
                             duration, results
                     );
@@ -820,7 +894,7 @@ public final class ChunkWriteBatch {
         CompletableFuture<WriteResult> future = new CompletableFuture<>();
         Runnable task = () -> {
             try {
-                for (BlockMutation m : edits.mutations) {
+                for (BlockMutation m : edits.getMutations()) {
                     BlockPos pos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
                     BlockState cur = level.getBlockState(pos);
                     if (m.matchesFilter(-1, cur)) {

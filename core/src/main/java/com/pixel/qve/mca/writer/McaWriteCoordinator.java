@@ -25,7 +25,8 @@ public final class McaWriteCoordinator implements Closeable {
     private final int minSectionY;
     private final int maxSectionY;
 
-    private final Map<Long, ReentrantLock> regionLocks = new ConcurrentHashMap<>();
+    private static final int STRIPE_COUNT = 256;
+    private final ReentrantLock[] regionLockStripes = new ReentrantLock[STRIPE_COUNT];
     private final Map<Long, McaRegionWriter> openWriters = new ConcurrentHashMap<>();
     private final List<IChunkWriteListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean synchronousVerification = false;
@@ -44,6 +45,17 @@ public final class McaWriteCoordinator implements Closeable {
         this.registry = Objects.requireNonNull(registry, "BlockIdRegistry cannot be null");
         this.minSectionY = minSectionY;
         this.maxSectionY = maxSectionY;
+        for (int i = 0; i < STRIPE_COUNT; i++) {
+            this.regionLockStripes[i] = new ReentrantLock();
+        }
+    }
+
+    private ReentrantLock getRegionLock(int rx, int rz) {
+        long key = regionKey(rx, rz);
+        int hash = (int) (key ^ (key >>> 32));
+        hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
+        hash = (hash ^ (hash >>> 16));
+        return regionLockStripes[hash & (STRIPE_COUNT - 1)];
     }
 
     /**
@@ -152,14 +164,23 @@ public final class McaWriteCoordinator implements Closeable {
             Map<Integer, VoxelSection> sections,
             List<VoxelMutation> mutations,
             Map<Long, byte[]> blockEntities,
-            VoxelCheck voxelCheck
+            VoxelCheck voxelCheck,
+            PrimitiveMutationBuffer mutationBuffer
     ) {
         public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, Map<Long, byte[]> blockEntities) {
-            this(chunkX, chunkZ, sections, List.of(), blockEntities, null);
+            this(chunkX, chunkZ, sections, List.of(), blockEntities, null, null);
         }
 
         public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, Map<Long, byte[]> blockEntities, VoxelCheck voxelCheck) {
-            this(chunkX, chunkZ, sections, List.of(), blockEntities, voxelCheck);
+            this(chunkX, chunkZ, sections, List.of(), blockEntities, voxelCheck, null);
+        }
+
+        public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, List<VoxelMutation> mutations, Map<Long, byte[]> blockEntities, VoxelCheck voxelCheck) {
+            this(chunkX, chunkZ, sections, mutations != null ? mutations : List.of(), blockEntities, voxelCheck, null);
+        }
+
+        public ChunkWriteTask(int chunkX, int chunkZ, Map<Integer, VoxelSection> sections, PrimitiveMutationBuffer mutationBuffer, Map<Long, byte[]> blockEntities, VoxelCheck voxelCheck) {
+            this(chunkX, chunkZ, sections, List.of(), blockEntities, voxelCheck, mutationBuffer);
         }
     }
 
@@ -189,8 +210,7 @@ public final class McaWriteCoordinator implements Closeable {
         if (chunks == null || chunks.isEmpty()) {
             return List.of();
         }
-        long rKey = regionKey(rx, rz);
-        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        ReentrantLock lock = getRegionLock(rx, rz);
         lock.lock();
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
@@ -214,16 +234,29 @@ public final class McaWriteCoordinator implements Closeable {
                         java.nio.ByteBuffer existingPayload = writer.readChunkPayload(localX, localZ);
                         if (existingPayload != null) {
                             try {
-                                FastChunkNbtPatcher.patchChunk(
-                                        existingPayload,
-                                        task.chunkX(), task.chunkZ(),
-                                        minSectionY, maxSectionY,
-                                        registry,
-                                        task.sections(),
-                                        task.mutations(),
-                                        task.blockEntities(),
-                                        nbtWriter
-                                );
+                                if (task.mutationBuffer() != null) {
+                                    FastChunkNbtPatcher.patchChunk(
+                                            existingPayload,
+                                            task.chunkX(), task.chunkZ(),
+                                            minSectionY, maxSectionY,
+                                            registry,
+                                            task.sections(),
+                                            task.mutationBuffer(),
+                                            task.blockEntities(),
+                                            nbtWriter
+                                    );
+                                } else {
+                                    FastChunkNbtPatcher.patchChunk(
+                                            existingPayload,
+                                            task.chunkX(), task.chunkZ(),
+                                            minSectionY, maxSectionY,
+                                            registry,
+                                            task.sections(),
+                                            task.mutations(),
+                                            task.blockEntities(),
+                                            nbtWriter
+                                    );
+                                }
                                 patched = true;
                             } catch (Exception e) {
                                 LOGGER.log(System.Logger.Level.WARNING,
@@ -235,7 +268,19 @@ public final class McaWriteCoordinator implements Closeable {
                     }
                     if (!patched) {
                         Map<Integer, VoxelSection> effectiveSections = task.sections();
-                        if (task.mutations() != null && !task.mutations().isEmpty()) {
+                        if (task.mutationBuffer() != null && !task.mutationBuffer().isEmpty()) {
+                            effectiveSections = (effectiveSections != null) ? new HashMap<>(effectiveSections) : new HashMap<>();
+                            PrimitiveMutationBuffer buf = task.mutationBuffer();
+                            for (int mi = 0, sz = buf.size(); mi < sz; mi++) {
+                                int wy = buf.worldY(mi);
+                                int secY = wy >> 4;
+                                VoxelSection sec = effectiveSections.computeIfAbsent(secY, k -> new VoxelSection());
+                                int lx = buf.localX(mi);
+                                int ly = wy & 15;
+                                int lz = buf.localZ(mi);
+                                sec.set(lx, ly, lz, buf.targetBlockId(mi));
+                            }
+                        } else if (task.mutations() != null && !task.mutations().isEmpty()) {
                             effectiveSections = (effectiveSections != null) ? new HashMap<>(effectiveSections) : new HashMap<>();
                             for (VoxelMutation m : task.mutations()) {
                                 int secY = m.worldY() >> 4;
@@ -351,9 +396,8 @@ public final class McaWriteCoordinator implements Closeable {
         int localX = chunkX & 31;
         int localZ = chunkZ & 31;
         int localIndex = localX + localZ * 32;
-        long rKey = regionKey(rx, rz);
 
-        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        ReentrantLock lock = getRegionLock(rx, rz);
         lock.lock();
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
@@ -460,7 +504,7 @@ public final class McaWriteCoordinator implements Closeable {
         int localCz = chunkZ & 31;
         long rKey = regionKey(rx, rz);
 
-        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        ReentrantLock lock = getRegionLock(rx, rz);
         lock.lock();
         try {
             McaRegionWriter writer = openWriters.get(rKey);
@@ -502,8 +546,7 @@ public final class McaWriteCoordinator implements Closeable {
         int rz = chunkZ >> 5;
         int localX = chunkX & 31;
         int localZ = chunkZ & 31;
-        long rKey = regionKey(rx, rz);
-        ReentrantLock lock = regionLocks.computeIfAbsent(rKey, k -> new ReentrantLock());
+        ReentrantLock lock = getRegionLock(rx, rz);
         lock.lock();
         try {
             McaRegionWriter writer = getOrOpenWriter(rx, rz);
@@ -557,6 +600,5 @@ public final class McaWriteCoordinator implements Closeable {
             }
         }
         openWriters.clear();
-        regionLocks.clear();
     }
 }

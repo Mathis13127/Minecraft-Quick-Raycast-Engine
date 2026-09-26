@@ -51,15 +51,31 @@ public final class BlockStatePaletteUnpacker {
      * @param shapeRegistry Optional ShapeRegistry for full-cube evaluation
      */
     public static void unpackInto(int[] paletteIds, long[] data, VoxelSection target, ShapeRegistry shapeRegistry) {
+        int pLen = (paletteIds != null) ? paletteIds.length : 0;
+        int dLen = (data != null) ? data.length : 0;
+        unpackInto(paletteIds, pLen, data, dLen, target, shapeRegistry);
+    }
+
+    /**
+     * Unpacks block states into an existing {@link VoxelSection} with explicit buffer lengths to support zero-allocation reusable pools.
+     *
+     * @param paletteIds    Array of 32-bit block IDs
+     * @param paletteCount  Actual number of valid entries in paletteIds
+     * @param data          Packed long array containing bit fields
+     * @param dataCount     Actual number of valid long words in data
+     * @param target        Target section to populate
+     * @param shapeRegistry Optional ShapeRegistry for full-cube evaluation
+     */
+    public static void unpackInto(int[] paletteIds, int paletteCount, long[] data, int dataCount, VoxelSection target, ShapeRegistry shapeRegistry) {
         Objects.requireNonNull(target, "Target VoxelSection cannot be null");
         target.clear();
 
-        if (paletteIds == null || paletteIds.length == 0) {
+        if (paletteIds == null || paletteCount <= 0) {
             return;
         }
 
         // Single palette entry: section is completely homogeneous
-        if (paletteIds.length == 1) {
+        if (paletteCount == 1) {
             int blockId = paletteIds[0];
             if (blockId != BlockIdRegistry.AIR_ID) {
                 Arrays.fill(target.getBitmask(), ~0L);
@@ -71,11 +87,11 @@ public final class BlockStatePaletteUnpacker {
             return;
         }
 
-        if (data == null || data.length == 0) {
-            throw new IllegalArgumentException("Data longs array cannot be null or empty when palette has multiple entries (size=" + paletteIds.length + ")");
+        if (data == null || dataCount <= 0) {
+            throw new IllegalArgumentException("Data longs array cannot be null or empty when palette has multiple entries (size=" + paletteCount + ")");
         }
 
-        int bitsPerBlock = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteIds.length - 1));
+        int bitsPerBlock = Math.max(4, 32 - Integer.numberOfLeadingZeros(paletteCount - 1));
         int entriesPerLong = 64 / bitsPerBlock;
         long bitMask = (1L << bitsPerBlock) - 1L;
 
@@ -84,15 +100,15 @@ public final class BlockStatePaletteUnpacker {
         int solidCount = 0;
 
         int voxelIdx = 0;
-        for (int l = 0; l < data.length && voxelIdx < VoxelSection.VOXEL_COUNT; l++) {
+        for (int l = 0; l < dataCount && voxelIdx < VoxelSection.VOXEL_COUNT; l++) {
             long word = data[l];
             int countInWord = Math.min(entriesPerLong, VoxelSection.VOXEL_COUNT - voxelIdx);
             for (int e = 0; e < countInWord; e++) {
                 int paletteIndex = (int) (word & bitMask);
                 word >>>= bitsPerBlock;
 
-                if (paletteIndex >= paletteIds.length) {
-                    throw new IllegalStateException("Palette index out of bounds: index=" + paletteIndex + ", palette size=" + paletteIds.length);
+                if (paletteIndex >= paletteCount) {
+                    throw new IllegalStateException("Palette index out of bounds: index=" + paletteIndex + ", palette size=" + paletteCount);
                 }
 
                 int blockId = paletteIds[paletteIndex];
@@ -111,7 +127,7 @@ public final class BlockStatePaletteUnpacker {
         }
 
         target.recalculateSolidCount();
-        target.setAllSolidAreFullCubes(checkAllFullCubes(paletteIds, shapeRegistry));
+        target.setAllSolidAreFullCubes(checkAllFullCubes(paletteIds, paletteCount, shapeRegistry));
     }
 
     /**
@@ -191,10 +207,15 @@ public final class BlockStatePaletteUnpacker {
     }
 
     private static boolean checkAllFullCubes(int[] paletteIds, ShapeRegistry shapeRegistry) {
-        if (shapeRegistry == null) {
+        return checkAllFullCubes(paletteIds, (paletteIds != null) ? paletteIds.length : 0, shapeRegistry);
+    }
+
+    private static boolean checkAllFullCubes(int[] paletteIds, int paletteCount, ShapeRegistry shapeRegistry) {
+        if (shapeRegistry == null || paletteIds == null) {
             return false;
         }
-        for (int pid : paletteIds) {
+        for (int i = 0; i < paletteCount; i++) {
+            int pid = paletteIds[i];
             if (pid != BlockIdRegistry.AIR_ID && !shapeRegistry.getShape(pid).isFullCube()) {
                 return false;
             }

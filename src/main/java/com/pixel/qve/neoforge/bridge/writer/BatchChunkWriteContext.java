@@ -55,9 +55,7 @@ public class BatchChunkWriteContext implements IChunkWriteContext {
 
     @Override
     public void setBlock(int localX, int worldY, int localZ, int blockId) {
-        int wx = (chunkX << 4) | (localX & 15);
-        int wz = (chunkZ << 4) | (localZ & 15);
-        edits.addMutation(new ChunkWriteBatch.BlockMutation(wx, worldY, wz, blockId, null, null, null, -1, null));
+        edits.addMutation(localX & 15, worldY, localZ & 15, blockId, -1, null);
     }
 
     @Override
@@ -128,10 +126,14 @@ public class BatchChunkWriteContext implements IChunkWriteContext {
                 mask |= (1 << (secY - minSectionY));
             }
         }
-        for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
-            int secY = m.worldY() >> 4;
-            if (secY >= minSectionY && secY <= maxSectionY) {
-                mask |= (1 << (secY - minSectionY));
+        if (edits.getMutationBuffer() != null) {
+            mask |= edits.getMutationBuffer().getModifiedSectionMask(minSectionY, maxSectionY);
+        } else {
+            for (ChunkWriteBatch.BlockMutation m : edits.getMutations()) {
+                int secY = m.worldY() >> 4;
+                if (secY >= minSectionY && secY <= maxSectionY) {
+                    mask |= (1 << (secY - minSectionY));
+                }
             }
         }
         return mask;
