@@ -4,11 +4,17 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
-import com.pixel.qve.neoforge.api.VoxelWriteAPI;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -31,28 +37,84 @@ public final class QveTerrainCommand {
         // 1. /qve terrain generate <chunkX> <chunkZ> [stage]
         terrainNode.then(Commands.literal("generate")
                 .then(Commands.argument("chunkX", IntegerArgumentType.integer())
+                        .suggests(QveTerrainCommand::suggestTargetedChunkX)
                         .then(Commands.argument("chunkZ", IntegerArgumentType.integer())
+                                .suggests(QveTerrainCommand::suggestTargetedChunkZ)
                                 .executes(ctx -> executeGenerate(ctx, TerrainStage.SURFACE))
                                 .then(Commands.argument("stage", StringArgumentType.word())
-                                        .suggests((ctx, builder) -> {
-                                            builder.suggest("biomes");
-                                            builder.suggest("noise");
-                                            builder.suggest("surface");
-                                            builder.suggest("carvers");
-                                            return builder.buildFuture();
-                                        })
+                                        .suggests(QveTerrainCommand::suggestStages)
                                         .executes(ctx -> {
                                             String stageStr = StringArgumentType.getString(ctx, "stage");
                                             return executeGenerate(ctx, TerrainStage.fromString(stageStr));
                                         })))));
 
-        // 2. /qve terrain sample <x> <z> (NoFogGiven / Radar LOD math sampler)
+        // 2. /qve terrain stamp <srcChunkX> <srcChunkZ> [targetPos] [stage]
+        var stampSrcZ = Commands.argument("srcChunkZ", IntegerArgumentType.integer())
+                .suggests(QveTerrainCommand::suggestTargetedChunkZ)
+                // /qve terrain stamp <srcX> <srcZ> (defaults to player current chunk)
+                .executes(ctx -> executeStamp(ctx, null, TerrainStage.SURFACE))
+                .then(Commands.argument("targetPos", BlockPosArgument.blockPos())
+                        .executes(ctx -> executeStamp(ctx, BlockPosArgument.getBlockPos(ctx, "targetPos"), TerrainStage.SURFACE))
+                        .then(Commands.argument("stage", StringArgumentType.word())
+                                .suggests(QveTerrainCommand::suggestStages)
+                                .executes(ctx -> {
+                                    BlockPos targetPos = BlockPosArgument.getBlockPos(ctx, "targetPos");
+                                    TerrainStage stage = TerrainStage.fromString(StringArgumentType.getString(ctx, "stage"));
+                                    return executeStamp(ctx, targetPos, stage);
+                                })))
+                .then(Commands.argument("stage", StringArgumentType.word())
+                        .suggests(QveTerrainCommand::suggestStages)
+                        .executes(ctx -> {
+                            TerrainStage stage = TerrainStage.fromString(StringArgumentType.getString(ctx, "stage"));
+                            return executeStamp(ctx, null, stage);
+                        }));
+
+        terrainNode.then(Commands.literal("stamp")
+                .then(Commands.argument("srcChunkX", IntegerArgumentType.integer())
+                        .suggests(QveTerrainCommand::suggestTargetedChunkX)
+                        .then(stampSrcZ)));
+
+        // 3. /qve terrain sample <x> <z> (NoFogGiven / Radar LOD math sampler)
         terrainNode.then(Commands.literal("sample")
                 .then(Commands.argument("x", IntegerArgumentType.integer())
                         .then(Commands.argument("z", IntegerArgumentType.integer())
                                 .executes(QveTerrainCommand::executeSample))));
 
         root.then(terrainNode);
+    }
+
+    private static CompletableFuture<Suggestions> suggestStages(CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        builder.suggest("biomes");
+        builder.suggest("noise");
+        builder.suggest("surface");
+        builder.suggest("carvers");
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestTargetedChunkX(CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        CommandSourceStack source = ctx.getSource();
+        if (source.getEntity() instanceof ServerPlayer player) {
+            HitResult hit = player.pick(128.0, 0.0f, false);
+            if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+                builder.suggest(String.valueOf(bhr.getBlockPos().getX() >> 4));
+            }
+            builder.suggest(String.valueOf(player.blockPosition().getX() >> 4));
+        }
+        builder.suggest("0");
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestTargetedChunkZ(CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        CommandSourceStack source = ctx.getSource();
+        if (source.getEntity() instanceof ServerPlayer player) {
+            HitResult hit = player.pick(128.0, 0.0f, false);
+            if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+                builder.suggest(String.valueOf(bhr.getBlockPos().getZ() >> 4));
+            }
+            builder.suggest(String.valueOf(player.blockPosition().getZ() >> 4));
+        }
+        builder.suggest("0");
+        return builder.buildFuture();
     }
 
     private static int executeGenerate(CommandContext<CommandSourceStack> ctx, TerrainStage stage) {
@@ -92,6 +154,72 @@ public final class QveTerrainCommand {
                 }
             });
         });
+
+        return 1;
+    }
+
+    private static int executeStamp(CommandContext<CommandSourceStack> ctx, BlockPos targetPos, TerrainStage stage) {
+        CommandSourceStack source = ctx.getSource();
+        ServerLevel level = source.getLevel();
+        int srcChunkX = IntegerArgumentType.getInteger(ctx, "srcChunkX");
+        int srcChunkZ = IntegerArgumentType.getInteger(ctx, "srcChunkZ");
+
+        // If targetPos is null, default to player's current position (or line of sight)
+        int dstChunkX;
+        int dstChunkZ;
+        if (targetPos != null) {
+            dstChunkX = targetPos.getX() >> 4;
+            dstChunkZ = targetPos.getZ() >> 4;
+        } else if (source.getEntity() instanceof ServerPlayer player) {
+            HitResult hit = player.pick(128.0, 0.0f, false);
+            if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+                dstChunkX = bhr.getBlockPos().getX() >> 4;
+                dstChunkZ = bhr.getBlockPos().getZ() >> 4;
+            } else {
+                dstChunkX = player.blockPosition().getX() >> 4;
+                dstChunkZ = player.blockPosition().getZ() >> 4;
+            }
+        } else {
+            dstChunkX = srcChunkX;
+            dstChunkZ = srcChunkZ;
+        }
+
+        boolean liveRam = level.isLoaded(new BlockPos(dstChunkX << 4, 64, dstChunkZ << 4));
+
+        source.sendSuccess(() -> Component.literal(String.format(
+                "§7[QVE Terrain] Stamping virtual chunk §e(%d, %d) §7-> target §f(%d, %d) §7[%s] at stage §e[%s]§7...",
+                srcChunkX, srcChunkZ, dstChunkX, dstChunkZ,
+                liveRam ? "§aLive RAM" : "§bOffline Disk",
+                stage.getName()
+        )), false);
+
+        QveTerrainEngine.generateVirtualChunkAsync(level, srcChunkX, srcChunkZ, stage)
+                .thenCompose(vc -> QveTerrainEngine.stampVirtualChunkAsync(level, vc, dstChunkX, dstChunkZ))
+                .thenAccept(res -> {
+                    level.getServer().execute(() -> {
+                        if (res.isSuccess()) {
+                            double ms = res.durationNanos() / 1_000_000.0;
+                            String modeStr = (res.status() == com.pixel.qve.neoforge.api.WriteStatus.SUCCESS_RAM)
+                                    ? "§aLive RAM (Packet Synced)"
+                                    : "§bAnvil MCA Disk";
+
+                            source.sendSuccess(() -> Component.literal(String.format(
+                                    "§a=== [Quick Voxel Engine: Virtual Chunk STAMP SUCCESS] ===\n" +
+                                    "§7Source Seed Chunk: §e(%d, %d) §8| §7Stage: §e%s\n" +
+                                    "§7Destination Chunk: §f(%d, %d) §8| §7Target: %s\n" +
+                                    "§7Duration: §f%.2f ms §8| §7Status: §a%s",
+                                    srcChunkX, srcChunkZ, stage.getName(),
+                                    dstChunkX, dstChunkZ, modeStr,
+                                    ms, res.status()
+                            )), true);
+                        } else {
+                            source.sendFailure(Component.literal(String.format(
+                                    "§c[QVE Terrain] Stamping FAILED for target (%d, %d): %s",
+                                    dstChunkX, dstChunkZ, res.errorMessage()
+                            )));
+                        }
+                    });
+                });
 
         return 1;
     }
