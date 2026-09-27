@@ -31,6 +31,12 @@ public class QveCommandTest {
         assertNotNull(qve.getChild("benchmark_mca"), "Subcommand 'benchmark_mca' should exist");
         assertNotNull(qve.getChild("hud"), "Subcommand 'hud' should exist");
 
+        // Verify light subcommand branch
+        var light = qve.getChild("light");
+        assertNotNull(light, "Subcommand 'light' should exist");
+        assertNotNull(light.getChild("update"), "Subcommand 'light update' should exist");
+        assertNotNull(light.getChild("relight"), "Subcommand 'light relight' should exist");
+
         // Verify aliases redirecting to /qve
         var raycast = dispatcher.getRoot().getChild("raycast");
         assertNotNull(raycast, "Alias /raycast should be registered");

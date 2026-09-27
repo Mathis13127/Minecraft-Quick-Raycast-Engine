@@ -48,7 +48,10 @@ public final class QveCommand {
         // 4. Attach terrain generation subsystem
         com.pixel.qve.neoforge.terrain.QveTerrainCommand.register(qveRoot);
 
-        // 4. Attach HUD subsystem
+        // 5. Attach lighting calculation & update subsystem
+        QveLightCommand.register(qveRoot);
+
+        // 6. Attach HUD subsystem
         qveRoot.then(Commands.literal("hud")
                 .executes(RaycastHudTracker::executeToggleDefault)
                 .then(Commands.literal("off")
