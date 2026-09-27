@@ -72,7 +72,7 @@ public final class VoxelLightChunkAdapter implements LightChunk {
 
         for (int secY = minSectionY; secY < maxSectionY; secY++) {
             VoxelSection sec = column.getSection(secY);
-            if (sec == null || sec.isEmpty()) {
+            if (sec == null || sec.isEmpty() || !sec.hasLightEmitters()) {
                 continue;
             }
             int baseWorldY = secY << 4;
@@ -80,7 +80,7 @@ public final class VoxelLightChunkAdapter implements LightChunk {
                 for (int z = 0; z < 16; z++) {
                     for (int x = 0; x < 16; x++) {
                         int blockId = sec.getBlockId(x, y, z);
-                        if (blockId == BlockIdRegistry.AIR_ID) {
+                        if (blockId == BlockIdRegistry.AIR_ID || !MinecraftVoxelBridge.isLightEmitter(blockId)) {
                             continue;
                         }
                         BlockState state = MinecraftVoxelBridge.getBlockState(blockId);

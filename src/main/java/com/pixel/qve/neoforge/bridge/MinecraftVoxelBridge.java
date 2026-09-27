@@ -42,6 +42,7 @@ public final class MinecraftVoxelBridge {
     private static final Map<BlockState, Integer> STATE_TO_ID = new ConcurrentHashMap<>();
     private static final Map<Integer, BlockState> ID_TO_STATE = new ConcurrentHashMap<>();
     private static volatile int[] STATE_ID_ARRAY = new int[32768];
+    private static volatile byte[] ID_LIGHT_EMISSION = new byte[32768];
     private static final Map<ResourceKey<Level>, MinecraftVoxelGrid> WORLD_GRIDS = new ConcurrentHashMap<>();
 
     private MinecraftVoxelBridge() {}
@@ -222,6 +223,17 @@ public final class MinecraftVoxelBridge {
             }
         }
 
+        byte light = (byte) state.getLightEmission();
+        byte[] lightArr = ID_LIGHT_EMISSION;
+        if (id >= lightArr.length) {
+            int newCap = Math.max(lightArr.length * 2, id + 1024);
+            byte[] newLightArr = java.util.Arrays.copyOf(lightArr, newCap);
+            newLightArr[id] = light;
+            ID_LIGHT_EMISSION = newLightArr;
+        } else {
+            lightArr[id] = light;
+        }
+
         STATE_TO_ID.put(state, id);
         ID_TO_STATE.put(id, state);
         return id;
@@ -244,10 +256,45 @@ public final class MinecraftVoxelBridge {
                 }
                 byte traits = MinecraftShapeCompiler.resolveTraitsForState(state, state.getBlock(), shape);
                 TRAIT_REGISTRY.setTraits(blockId, traits);
+
+                byte light = (byte) state.getLightEmission();
+                byte[] lArr = ID_LIGHT_EMISSION;
+                if (blockId >= lArr.length) {
+                    int newCap = Math.max(lArr.length * 2, blockId + 1024);
+                    byte[] newLightArr = java.util.Arrays.copyOf(lArr, newCap);
+                    newLightArr[blockId] = light;
+                    ID_LIGHT_EMISSION = newLightArr;
+                } else {
+                    lArr[blockId] = light;
+                }
             }
         } catch (Throwable t) {
             LOGGER.debug("Could not resolve dynamic shape for state {}: {}", canonicalState, t.getMessage());
         }
+    }
+
+    /**
+     * Resolves the Minecraft block light emission value [0..15] for a given QVE block ID in 1 CPU cycle.
+     *
+     * @param blockId 32-bit block ID
+     * @return Light emission level [0..15]
+     */
+    public static int getLightEmission(int blockId) {
+        if (blockId <= 0) {
+            return 0;
+        }
+        byte[] arr = ID_LIGHT_EMISSION;
+        return (blockId < arr.length) ? arr[blockId] : 0;
+    }
+
+    /**
+     * Fast-path check: returns true if the block ID represents a block that emits light (emission > 0).
+     *
+     * @param blockId 32-bit block ID
+     * @return True if block emits light
+     */
+    public static boolean isLightEmitter(int blockId) {
+        return getLightEmission(blockId) > 0;
     }
 
     /**
@@ -342,6 +389,7 @@ public final class MinecraftVoxelBridge {
         int firstSolidId = BlockIdRegistry.AIR_ID;
         boolean homogeneous = true;
         boolean allFullCubes = true;
+        boolean hasLightEmitters = false;
 
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
@@ -353,6 +401,10 @@ public final class MinecraftVoxelBridge {
                         scratchIds[idx] = id;
                         scratchMask[idx >>> 6] |= (1L << (idx & 63));
                         solidCount++;
+
+                        if (isLightEmitter(id)) {
+                            hasLightEmitters = true;
+                        }
 
                         if (firstSolidId == BlockIdRegistry.AIR_ID) {
                             firstSolidId = id;
@@ -387,10 +439,12 @@ public final class MinecraftVoxelBridge {
             // 100% full of a single block (e.g. stone, deepslate underground)
             // Zero heap allocation for blockIds array (saves 16 KB per underground section!)
             compiled = VoxelSection.createHomogeneous(firstSolidId, allFullCubes);
+            compiled.setHasLightEmitters(hasLightEmitters);
         } else {
             long[] maskCopy = java.util.Arrays.copyOf(scratchMask, VoxelSection.MASK_WORDS);
             int[] idsCopy = java.util.Arrays.copyOf(scratchIds, VoxelSection.VOXEL_COUNT);
             compiled = new VoxelSection(maskCopy, idsCopy, solidCount, allFullCubes);
+            compiled.setHasLightEmitters(hasLightEmitters);
         }
 
         if (column != null) {
@@ -430,12 +484,16 @@ public final class MinecraftVoxelBridge {
                 boolean solid = !newState.isAir();
                 int blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
                 voxelSection.setVoxel(localX, localY, localZ, solid, blockId);
+                if (solid && isLightEmitter(blockId)) {
+                    voxelSection.setHasLightEmitters(true);
+                }
                 if (solid && !SHAPE_REGISTRY.getShape(blockId).isFullCube()) {
                     voxelSection.setAllSolidAreFullCubes(false);
                 }
 
                 VoxelChunkColumn column = section.raycast$getVoxelColumn();
                 if (column != null) {
+                    column.setCachedLighting(null);
                     int worldY = (section.raycast$getSectionY() << 4) | localY;
                     column.onVoxelChanged(localX, worldY, localZ, solid);
                 }
@@ -474,5 +532,7 @@ public final class MinecraftVoxelBridge {
         }
         WORLD_GRIDS.clear();
         STATE_TO_ID.clear();
+        ID_TO_STATE.clear();
+        ID_LIGHT_EMISSION = new byte[32768];
     }
 }

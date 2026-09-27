@@ -33,6 +33,7 @@ public final class VoxelSection {
         try {
             SOLID_COUNT_HANDLE = java.lang.invoke.MethodHandles.lookup()
                     .findVarHandle(VoxelSection.class, "solidCount", int.class);
+            EMPTY.setHasLightEmitters(false);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -44,6 +45,7 @@ public final class VoxelSection {
     private volatile boolean isHomogeneous;
     private volatile int singleBlockId;
     private boolean allSolidAreFullCubes;
+    private volatile boolean hasLightEmitters;
 
     /**
      * Constructs an empty VoxelSection.
@@ -55,6 +57,7 @@ public final class VoxelSection {
         this.isHomogeneous = false;
         this.singleBlockId = 0;
         this.allSolidAreFullCubes = false;
+        this.hasLightEmitters = true;
     }
 
     /**
@@ -89,6 +92,7 @@ public final class VoxelSection {
         this.isHomogeneous = false;
         this.singleBlockId = 0;
         this.allSolidAreFullCubes = allSolidAreFullCubes;
+        this.hasLightEmitters = true;
     }
 
     /**
@@ -106,6 +110,7 @@ public final class VoxelSection {
         this.singleBlockId = singleBlockId;
         this.solidCount = solidCount;
         this.allSolidAreFullCubes = allSolidAreFullCubes;
+        this.hasLightEmitters = true;
     }
 
     /**
@@ -318,6 +323,24 @@ public final class VoxelSection {
     }
 
     /**
+     * Returns true if this section is known to contain at least one block emitting light.
+     *
+     * @return True if light emitters exist in this section
+     */
+    public boolean hasLightEmitters() {
+        return hasLightEmitters;
+    }
+
+    /**
+     * Sets whether this section contains at least one block emitting light.
+     *
+     * @param hasLightEmitters True if light emitters exist
+     */
+    public void setHasLightEmitters(boolean hasLightEmitters) {
+        this.hasLightEmitters = hasLightEmitters;
+    }
+
+    /**
      * Resets this section to pure air.
      */
     public void clear() {
@@ -328,6 +351,7 @@ public final class VoxelSection {
         Arrays.fill(blockIds, 0);
         this.solidCount = 0;
         this.allSolidAreFullCubes = true;
+        this.hasLightEmitters = false;
     }
 
     /**
@@ -364,10 +388,14 @@ public final class VoxelSection {
      */
     public VoxelSection copy() {
         long[] maskCopy = Arrays.copyOf(bitmask, bitmask.length);
+        VoxelSection cloned;
         if (isHomogeneous) {
-            return new VoxelSection(maskCopy, singleBlockId, solidCount, allSolidAreFullCubes);
+            cloned = new VoxelSection(maskCopy, singleBlockId, solidCount, allSolidAreFullCubes);
+        } else {
+            int[] idsCopy = Arrays.copyOf(blockIds, blockIds.length);
+            cloned = new VoxelSection(maskCopy, idsCopy, solidCount, allSolidAreFullCubes);
         }
-        int[] idsCopy = Arrays.copyOf(blockIds, blockIds.length);
-        return new VoxelSection(maskCopy, idsCopy, solidCount, allSolidAreFullCubes);
+        cloned.hasLightEmitters = this.hasLightEmitters;
+        return cloned;
     }
 }

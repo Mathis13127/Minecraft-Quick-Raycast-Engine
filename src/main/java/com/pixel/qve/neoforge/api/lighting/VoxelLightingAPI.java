@@ -48,9 +48,15 @@ public final class VoxelLightingAPI {
      */
     public static VoxelChunkLighting computeLighting(Level level, VoxelChunkColumn targetColumn) {
         Objects.requireNonNull(targetColumn, "targetColumn cannot be null");
+        Object cached = targetColumn.getCachedLighting();
+        if (cached instanceof VoxelChunkLighting vcl) {
+            return vcl;
+        }
         MinecraftVoxelGrid grid = (level != null) ? MinecraftVoxelBridge.getOrCreateGrid(level) : null;
         UnifiedLightChunkGetter getter = new UnifiedLightChunkGetter(level, grid, targetColumn);
-        return QveLightingEngine.computeLighting(getter);
+        VoxelChunkLighting result = QveLightingEngine.computeLighting(getter);
+        targetColumn.setCachedLighting(result);
+        return result;
     }
 
     /**
@@ -89,7 +95,6 @@ public final class VoxelLightingAPI {
             return new DefaultVoxelChunkLighting(chunkX, chunkZ, minSecY, maxSecY, emptySky, emptyBlock);
         }
 
-        UnifiedLightChunkGetter getter = new UnifiedLightChunkGetter(level, grid, targetCol);
-        return QveLightingEngine.computeLighting(getter);
+        return computeLighting(level, targetCol);
     }
 }

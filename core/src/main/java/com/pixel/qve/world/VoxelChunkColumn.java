@@ -22,6 +22,7 @@ public final class VoxelChunkColumn {
     private final int sectionCount;
     private final AtomicReferenceArray<VoxelSection> sections;
     private final Heightmap2D heightmap;
+    private volatile Object cachedLighting;
 
     /**
      * Constructs a chunk column for the given coordinates and section bounds.
@@ -122,6 +123,7 @@ public final class VoxelChunkColumn {
         int index = sectionY - minSectionY;
         if (index >= 0 && index < sectionCount) {
             sections.set(index, section);
+            this.cachedLighting = null;
             if (section != null && !section.isEmpty()) {
                 heightmap.updateFromSection(sectionY, section);
             }
@@ -170,6 +172,7 @@ public final class VoxelChunkColumn {
      * @param solid  True if solid
      */
     public void onVoxelChanged(int localX, int worldY, int localZ, boolean solid) {
+        this.cachedLighting = null;
         if (solid) {
             heightmap.updateMax(localX, localZ, (short) worldY);
         } else {
@@ -235,5 +238,23 @@ public final class VoxelChunkColumn {
             }
         }
         return true;
+    }
+
+    /**
+     * Gets the cached lighting calculation object (e.g. VoxelChunkLighting), or null if not yet computed or invalidated.
+     *
+     * @return Cached lighting object
+     */
+    public Object getCachedLighting() {
+        return cachedLighting;
+    }
+
+    /**
+     * Stores a computed lighting calculation object for this column.
+     *
+     * @param cachedLighting Cached lighting object
+     */
+    public void setCachedLighting(Object cachedLighting) {
+        this.cachedLighting = cachedLighting;
     }
 }
