@@ -36,6 +36,8 @@ public class QveCommandTest {
         assertNotNull(light, "Subcommand 'light' should exist");
         assertNotNull(light.getChild("update"), "Subcommand 'light update' should exist");
         assertNotNull(light.getChild("relight"), "Subcommand 'light relight' should exist");
+        assertNotNull(light.getChild("corrupt"), "Subcommand 'light corrupt' should exist");
+        assertNotNull(light.getChild("corrupt").getChild("mode"), "Argument 'mode' under 'light corrupt' should exist");
 
         // Verify aliases redirecting to /qve
         var raycast = dispatcher.getRoot().getChild("raycast");

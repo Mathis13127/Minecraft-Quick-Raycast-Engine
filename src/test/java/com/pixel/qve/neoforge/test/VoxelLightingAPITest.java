@@ -38,6 +38,92 @@ public class VoxelLightingAPITest {
     }
 
     @Test
+    @DisplayName("Verify ClientboundLightUpdatePacket creation from VoxelChunkLighting and network roundtrip")
+    void testClientboundLightUpdatePacketCreation() {
+        VoxelChunkColumn column = new VoxelChunkColumn(10, 20, -4, 20);
+        VoxelChunkLighting lighting = VoxelLightingAPI.computeLighting(null, column);
+        assertNotNull(lighting);
+
+        net.minecraft.world.level.LevelHeightAccessor heightAccessor = new net.minecraft.world.level.LevelHeightAccessor() {
+            @Override public int getHeight() { return 384; }
+            @Override public int getMinBuildHeight() { return -64; }
+        };
+
+        net.minecraft.world.level.ChunkPos cpos = new net.minecraft.world.level.ChunkPos(10, 20);
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket packet =
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.createUpdatePacket(cpos, heightAccessor, lighting);
+
+        assertNotNull(packet);
+        assertEquals(10, packet.getX());
+        assertEquals(20, packet.getZ());
+        assertNotNull(packet.getLightData());
+
+        // Test stream codec serialization & deserialization roundtrip
+        net.minecraft.network.FriendlyByteBuf buffer = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket.STREAM_CODEC.encode(buffer, packet);
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket decoded =
+                net.minecraft.network.protocol.game.ClientboundLightUpdatePacket.STREAM_CODEC.decode(buffer);
+
+        assertEquals(packet.getX(), decoded.getX());
+        assertEquals(packet.getZ(), decoded.getZ());
+        assertEquals(packet.getLightData().getSkyYMask(), decoded.getLightData().getSkyYMask());
+        assertEquals(packet.getLightData().getEmptyBlockYMask(), decoded.getLightData().getEmptyBlockYMask());
+    }
+
+    @Test
+    @DisplayName("Verify corrupted light packet generation for DARK, BRIGHT, and RANDOM modes")
+    void testCorruptedLightPacketGeneration() {
+        net.minecraft.world.level.LevelHeightAccessor heightAccessor = new net.minecraft.world.level.LevelHeightAccessor() {
+            @Override public int getHeight() { return 384; }
+            @Override public int getMinBuildHeight() { return -64; }
+        };
+        net.minecraft.world.level.ChunkPos cpos = new net.minecraft.world.level.ChunkPos(3, 7);
+
+        // 1. DARK mode
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket darkPacket =
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.createCorruptedPacket(
+                        cpos, heightAccessor, com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.DARK);
+        assertNotNull(darkPacket);
+        assertEquals(3, darkPacket.getX());
+        assertEquals(7, darkPacket.getZ());
+        assertTrue(darkPacket.getLightData().getSkyUpdates().isEmpty(), "DARK mode must not send raw byte buffers");
+        assertFalse(darkPacket.getLightData().getEmptySkyYMask().isEmpty(), "DARK mode must set empty sky mask");
+        assertFalse(darkPacket.getLightData().getEmptyBlockYMask().isEmpty(), "DARK mode must set empty block mask");
+
+        // 2. BRIGHT mode
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket brightPacket =
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.createCorruptedPacket(
+                        cpos, heightAccessor, com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.BRIGHT);
+        assertNotNull(brightPacket);
+        assertFalse(brightPacket.getLightData().getSkyUpdates().isEmpty(), "BRIGHT mode must send full light buffers");
+        assertFalse(brightPacket.getLightData().getBlockUpdates().isEmpty(), "BRIGHT mode must send full light buffers");
+
+        // 3. RANDOM mode
+        net.minecraft.network.protocol.game.ClientboundLightUpdatePacket randomPacket =
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.createCorruptedPacket(
+                        cpos, heightAccessor, com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.RANDOM);
+        assertNotNull(randomPacket);
+        assertFalse(randomPacket.getLightData().getSkyUpdates().isEmpty(), "RANDOM mode must send noise buffers");
+
+        // Verify mode resolution
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.DARK,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("dark"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.DARK,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("black"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.DARK,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("0"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.BRIGHT,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("bright"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.BRIGHT,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("full"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.RANDOM,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("random"));
+        assertEquals(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.RANDOM,
+                com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("noise"));
+        assertNull(com.pixel.qve.neoforge.lighting.QveLightPacketHelper.CorruptMode.fromString("unknown_mode"));
+    }
+
+    @Test
     @DisplayName("Verify sky light is 15 in open air and drops to 0 beneath a solid stone roof")
     void testSkyLightPropagationAndOcclusion() {
         VoxelChunkColumn column = new VoxelChunkColumn(0, 0, -4, 20);
