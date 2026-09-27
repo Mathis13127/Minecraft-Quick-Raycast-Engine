@@ -84,12 +84,30 @@ public final class VoxelLightChunkAdapter implements LightChunk {
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
                 short topY = (hm != null) ? hm.getHeight(x, z) : Heightmap2D.VOID_Y;
+                if (topY == Heightmap2D.VOID_Y) {
+                    topY = findHighestSolidVoxel(x, z);
+                }
                 int startY = (topY != Heightmap2D.VOID_Y)
                         ? Math.min(maxBuildHeight - 1, topY + 1)
                         : (maxBuildHeight - 1);
                 skyLightSources.update(this, x, startY, z);
             }
         }
+    }
+
+    private short findHighestSolidVoxel(int localX, int localZ) {
+        if (column == null) return Heightmap2D.VOID_Y;
+        for (int secY = maxSectionY - 1; secY >= minSectionY; secY--) {
+            VoxelSection sec = column.getSection(secY);
+            if (sec != null && !sec.isEmpty()) {
+                for (int y = 15; y >= 0; y--) {
+                    if (sec.isSolid(localX, y, localZ)) {
+                        return (short) ((secY << 4) | y);
+                    }
+                }
+            }
+        }
+        return Heightmap2D.VOID_Y;
     }
 
     /**

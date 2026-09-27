@@ -246,22 +246,20 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
         return null;
     }
 
-    private void populateHeightmapIfEmpty(LevelChunk chunk, VoxelChunkColumn col, int chunkX, int chunkZ) {
+    private void syncHeightmapFromChunk(LevelChunk chunk, VoxelChunkColumn col, int chunkX, int chunkZ) {
         Heightmap2D colHm = col.getHeightmap();
-        if (colHm.getHighestY() == Heightmap2D.VOID_Y) {
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    int h = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
-                    if (h > level.getMinBuildHeight()) {
-                        colHm.setHeight(x, z, (short) (h - 1));
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int h = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
+                if (h > level.getMinBuildHeight()) {
+                    colHm.setHeight(x, z, (short) (h - 1));
+                } else {
+                    net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(
+                            (chunkX << 4) | x, level.getMinBuildHeight(), (chunkZ << 4) | z);
+                    if (!chunk.getBlockState(pos).isAir()) {
+                        colHm.setHeight(x, z, (short) level.getMinBuildHeight());
                     } else {
-                        net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(
-                                (chunkX << 4) | x, level.getMinBuildHeight(), (chunkZ << 4) | z);
-                        if (!chunk.getBlockState(pos).isAir()) {
-                            colHm.setHeight(x, z, (short) level.getMinBuildHeight());
-                        } else {
-                            colHm.setHeight(x, z, Heightmap2D.VOID_Y);
-                        }
+                        colHm.setHeight(x, z, Heightmap2D.VOID_Y);
                     }
                 }
             }
@@ -274,7 +272,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
 
     /**
      * Ingests a live Minecraft LevelChunk directly into the UnifiedVoxelCache,
-     * populating the heightmap and compiling all non-empty sections.
+     * synchronizing the heightmap and compiling/binding all sections (including empty air sections).
      *
      * @param chunk Live LevelChunk
      * @return The populated VoxelChunkColumn, or null if chunk is null
@@ -286,7 +284,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
         int chunkX = chunk.getPos().x;
         int chunkZ = chunk.getPos().z;
         VoxelChunkColumn newCol = cache.getOrCreateColumn(chunkX, chunkZ);
-        populateHeightmapIfEmpty(chunk, newCol, chunkX, chunkZ);
+        syncHeightmapFromChunk(chunk, newCol, chunkX, chunkZ);
 
         int minSecY = level.getMinSection();
         int maxSecY = level.getMaxSection();
@@ -296,8 +294,16 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
             int secIdx = chunk.getSectionIndex(blockY);
             if (secIdx >= 0 && secIdx < sections.length) {
                 LevelChunkSection sec = sections[secIdx];
-                if (sec != null && !sec.hasOnlyAir()) {
-                    MinecraftVoxelBridge.compileSection(sec, newCol, sy);
+                if (sec != null) {
+                    if (!sec.hasOnlyAir()) {
+                        MinecraftVoxelBridge.compileSection(sec, newCol, sy);
+                    } else {
+                        newCol.setSection(sy, VoxelSection.EMPTY);
+                        if (sec instanceof IRaycastChunkSection bridge) {
+                            bridge.raycast$setVoxelSection(VoxelSection.EMPTY);
+                            bridge.raycast$setVoxelColumn(newCol, sy);
+                        }
+                    }
                 }
             }
         }
@@ -324,7 +330,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
         LevelChunk chunk = getChunkSafe(chunkX, chunkZ);
         if (chunk != null) {
             VoxelChunkColumn col = cache.getOrCreateColumn(chunkX, chunkZ);
-            populateHeightmapIfEmpty(chunk, col, chunkX, chunkZ);
+            syncHeightmapFromChunk(chunk, col, chunkX, chunkZ);
             return col.getHeightmap();
         }
 

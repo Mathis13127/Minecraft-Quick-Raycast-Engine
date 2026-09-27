@@ -469,18 +469,17 @@ public final class MinecraftVoxelBridge {
     public static void onBlockStateChanged(IRaycastChunkSection section, int localX, int localY, int localZ, BlockState newState) {
         if (section != null) {
             VoxelSection voxelSection = section.raycast$getVoxelSection();
-            if (voxelSection != null) {
-                if (voxelSection == VoxelSection.EMPTY) {
-                    if (newState.isAir()) {
-                        return;
-                    }
-                    voxelSection = new VoxelSection();
-                    section.raycast$setVoxelSection(voxelSection);
-                    VoxelChunkColumn column = section.raycast$getVoxelColumn();
-                    if (column != null) {
-                        column.setSection(section.raycast$getSectionY(), voxelSection);
-                    }
+            if (voxelSection == null || voxelSection == VoxelSection.EMPTY) {
+                if (newState.isAir()) {
+                    return;
                 }
+                voxelSection = new VoxelSection();
+                section.raycast$setVoxelSection(voxelSection);
+                VoxelChunkColumn column = section.raycast$getVoxelColumn();
+                if (column != null) {
+                    column.setSection(section.raycast$getSectionY(), voxelSection);
+                }
+            }
                 boolean solid = !newState.isAir();
                 int blockId = solid ? getBlockId(newState) : BlockIdRegistry.AIR_ID;
                 voxelSection.setVoxel(localX, localY, localZ, solid, blockId);
@@ -497,7 +496,6 @@ public final class MinecraftVoxelBridge {
                     int worldY = (section.raycast$getSectionY() << 4) | localY;
                     column.onVoxelChanged(localX, worldY, localZ, solid);
                 }
-            }
         }
     }
 

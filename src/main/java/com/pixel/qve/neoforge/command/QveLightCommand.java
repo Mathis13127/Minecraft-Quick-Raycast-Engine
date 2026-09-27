@@ -152,6 +152,24 @@ public final class QveLightCommand {
         int chunkCount = (chunkMaxX - chunkMinX + 1) * (chunkMaxZ - chunkMinZ + 1);
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(world);
 
+        // Re-ingest live LevelChunks in RAM (including 1-chunk boundary for 3x3 neighbor lighting context)
+        for (int cx = chunkMinX - 1; cx <= chunkMaxX + 1; cx++) {
+            for (int cz = chunkMinZ - 1; cz <= chunkMaxZ + 1; cz++) {
+                net.minecraft.world.level.chunk.LevelChunk liveChunk = world.getChunkSource().getChunkNow(cx, cz);
+                if (liveChunk != null) {
+                    grid.ingestChunk(liveChunk);
+                }
+            }
+        }
+        for (int cx = chunkMinX; cx <= chunkMaxX; cx++) {
+            for (int cz = chunkMinZ; cz <= chunkMaxZ; cz++) {
+                VoxelChunkColumn col = grid.getColumn(cx, cz);
+                if (col != null) {
+                    col.setCachedLighting(null);
+                }
+            }
+        }
+
         source.sendSuccess(() -> Component.literal(
                 String.format("§e[QVE] Relighting %d chunk(s) across X:[%d..%d], Z:[%d..%d] (RAM only, off-thread)...",
                         chunkCount, chunkMinX, chunkMaxX, chunkMinZ, chunkMaxZ)
@@ -163,10 +181,6 @@ public final class QveLightCommand {
 
             for (int cx = chunkMinX; cx <= chunkMaxX; cx++) {
                 for (int cz = chunkMinZ; cz <= chunkMaxZ; cz++) {
-                    VoxelChunkColumn col = grid.getColumn(cx, cz);
-                    if (col != null) {
-                        col.setCachedLighting(null);
-                    }
                     futures.add(VoxelLightingAPI.computeChunkLightingAsync(world, cx, cz));
                 }
             }

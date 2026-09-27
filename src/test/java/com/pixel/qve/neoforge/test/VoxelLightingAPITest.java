@@ -124,6 +124,88 @@ public class VoxelLightingAPITest {
     }
 
     @Test
+    @DisplayName("Verify enclosed player box has 0 sky light and 0 block light inside")
+    void testEnclosedBoxLighting() {
+        VoxelChunkColumn column = new VoxelChunkColumn(0, 0, -4, 20);
+        int stoneId = MinecraftVoxelBridge.getBlockId(Blocks.STONE.defaultBlockState());
+
+        // Build a hollow 5x5 box on ground level:
+        // Floor at Y = 64 (X: 5..9, Z: 5..9)
+        // Walls at Y = 65..69 (X: 5 and 9, Z: 5..9; and Z: 5 and 9, X: 5..9)
+        // Roof at Y = 70 (X: 5..9, Z: 5..9)
+        // Interior at (7, 67, 7)
+        for (int x = 5; x <= 9; x++) {
+            for (int z = 5; z <= 9; z++) {
+                column.setVoxel(x, 64, z, true, stoneId); // Floor
+                column.setVoxel(x, 70, z, true, stoneId); // Roof
+            }
+        }
+        for (int y = 65; y <= 69; y++) {
+            for (int i = 5; i <= 9; i++) {
+                column.setVoxel(5, y, i, true, stoneId);
+                column.setVoxel(9, y, i, true, stoneId);
+                column.setVoxel(i, y, 5, true, stoneId);
+                column.setVoxel(i, y, 9, true, stoneId);
+            }
+        }
+
+        VoxelChunkLighting lighting = VoxelLightingAPI.computeLighting(null, column);
+        assertNotNull(lighting);
+
+        // Outside the box at (2, 67, 2): MUST be daylight (15)!
+        int skyOutside = lighting.getSkyLight(2, 67, 2);
+        assertEquals(15, skyOutside, "Sky light outside box in open air must be 15");
+
+        // Inside the box at (7, 67, 7): MUST be pitch black!
+        int skyInside = lighting.getSkyLight(7, 67, 7);
+        int blockInside = lighting.getBlockLight(7, 67, 7);
+        assertEquals(0, skyInside, "Sky light inside enclosed box must be 0");
+        assertEquals(0, blockInside, "Block light inside unlit box must be 0");
+    }
+
+    @Test
+    @DisplayName("Verify dynamic block state changes on initially empty section update column and heightmap")
+    void testDynamicBlockPlacementOnEmptySection() {
+        VoxelChunkColumn column = new VoxelChunkColumn(0, 0, -4, 20);
+
+        // Dummy IRaycastChunkSection implementation simulating a LevelChunkSection
+        class DummySection implements com.pixel.qve.neoforge.bridge.IRaycastChunkSection {
+            private VoxelSection voxelSection = VoxelSection.EMPTY;
+            private VoxelChunkColumn col = column;
+            private int sectionY = 4;
+
+            @Override public VoxelSection raycast$getVoxelSection() { return voxelSection; }
+            @Override public void raycast$setVoxelSection(VoxelSection section) { this.voxelSection = section; }
+            @Override public VoxelChunkColumn raycast$getVoxelColumn() { return col; }
+            @Override public void raycast$setVoxelColumn(VoxelChunkColumn column, int sectionY) { this.col = column; this.sectionY = sectionY; }
+            @Override public int raycast$getSectionY() { return sectionY; }
+        }
+
+        DummySection dummy = new DummySection();
+        column.setSection(4, VoxelSection.EMPTY);
+
+        // Simulate player placing a stone block at (5, 68, 5) -> localY = 4
+        BlockState stoneState = Blocks.STONE.defaultBlockState();
+        MinecraftVoxelBridge.onBlockStateChanged(dummy, 5, 4, 5, stoneState);
+
+        // Verify section is no longer empty in the column
+        VoxelSection updatedSec = column.getSection(4);
+        assertNotNull(updatedSec, "Section 4 must be allocated upon block placement");
+        assertFalse(updatedSec.isEmpty(), "Section 4 must not be empty");
+        assertTrue(updatedSec.isSolid(5, 4, 5), "Voxel (5, 4, 5) must be solid");
+        assertEquals(MinecraftVoxelBridge.getBlockId(stoneState), updatedSec.getBlockId(5, 4, 5));
+
+        // Verify column heightmap updated to Y = 68
+        assertEquals(68, column.getHeightmap().getHeight(5, 5), "Heightmap must be updated to world Y 68");
+
+        // Verify VoxelLightChunkAdapter properly resolves the top Y even if heightmap was cleared
+        column.getHeightmap().setHeight(5, 5, com.pixel.qve.world.Heightmap2D.VOID_Y);
+        com.pixel.qve.neoforge.lighting.VoxelLightChunkAdapter adapter = new com.pixel.qve.neoforge.lighting.VoxelLightChunkAdapter(column);
+        net.minecraft.world.level.lighting.ChunkSkyLightSources sources = adapter.getSkyLightSources();
+        assertEquals(69, sources.getLowestSourceY(5, 5), "Lowest source Y must resolve to 69 above the stone block via fallback");
+    }
+
+    @Test
     @DisplayName("Verify sky light is 15 in open air and drops to 0 beneath a solid stone roof")
     void testSkyLightPropagationAndOcclusion() {
         VoxelChunkColumn column = new VoxelChunkColumn(0, 0, -4, 20);

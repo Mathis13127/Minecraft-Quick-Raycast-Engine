@@ -113,24 +113,58 @@ public final class QveLightingEngine {
                 } else {
                     rawSkyData[idx] = skyData.clone();
                 }
-            } else {
-                int centerLight = (skyListener != null)
-                        ? skyListener.getLightValue(new BlockPos((targetX << 4) + 8, (secY << 4) + 8, (targetZ << 4) + 8))
-                        : 15;
-                if (centerLight >= 15) {
-                    skyFullMask |= (1L << idx);
+            } else if (skyListener != null) {
+                LightChunk targetChunk = getter.getChunkForLighting(targetX, targetZ);
+                VoxelChunkColumn targetCol = (targetChunk instanceof VoxelLightChunkAdapter adapter) ? adapter.getColumn() : null;
+                VoxelSection sec = (targetCol != null) ? targetCol.getSection(secY) : null;
+                boolean hasSolid = (sec != null && !sec.isEmpty());
+
+                if (!hasSolid) {
+                    int bx = targetX << 4;
+                    int by = secY << 4;
+                    int bz = targetZ << 4;
+                    int c0 = skyListener.getLightValue(new BlockPos(bx, by, bz));
+                    int c1 = skyListener.getLightValue(new BlockPos(bx + 15, by, bz));
+                    int c2 = skyListener.getLightValue(new BlockPos(bx, by, bz + 15));
+                    int c3 = skyListener.getLightValue(new BlockPos(bx + 15, by, bz + 15));
+                    int c4 = skyListener.getLightValue(new BlockPos(bx, by + 15, bz));
+                    int c5 = skyListener.getLightValue(new BlockPos(bx + 15, by + 15, bz));
+                    int c6 = skyListener.getLightValue(new BlockPos(bx, by + 15, bz + 15));
+                    int c7 = skyListener.getLightValue(new BlockPos(bx + 15, by + 15, bz + 15));
+                    int center = skyListener.getLightValue(new BlockPos(bx + 8, by + 8, bz + 8));
+
+                    if (c0 >= 15 && c1 >= 15 && c2 >= 15 && c3 >= 15 && c4 >= 15 && c5 >= 15 && c6 >= 15 && c7 >= 15 && center >= 15) {
+                        skyFullMask |= (1L << idx);
+                    } else if (c0 <= 0 && c1 <= 0 && c2 <= 0 && c3 <= 0 && c4 <= 0 && c5 <= 0 && c6 <= 0 && c7 <= 0 && center <= 0) {
+                        skyZeroMask |= (1L << idx);
+                    } else {
+                        rawSkyData[idx] = extractSectionLight(skyListener, targetX, secY, targetZ);
+                    }
                 } else {
-                    skyZeroMask |= (1L << idx);
+                    rawSkyData[idx] = extractSectionLight(skyListener, targetX, secY, targetZ);
                 }
+            } else {
+                skyFullMask |= (1L << idx);
             }
 
             if (hasBlockLight && blockListener != null) {
                 DataLayer block = blockListener.getDataLayerData(sPos);
                 byte[] blockData = (block != null) ? block.getData() : null;
-                if (block == null || block.isEmpty() || block.isDefinitelyFilledWith(0) || DefaultVoxelChunkLighting.isUniform(blockData, (byte) 0x00)) {
-                    blockZeroMask |= (1L << idx);
+                if (block != null) {
+                    if (block.isEmpty() || block.isDefinitelyFilledWith(0) || DefaultVoxelChunkLighting.isUniform(blockData, (byte) 0x00)) {
+                        blockZeroMask |= (1L << idx);
+                    } else {
+                        rawBlockData[idx] = blockData.clone();
+                    }
                 } else {
-                    rawBlockData[idx] = blockData.clone();
+                    LightChunk targetChunk = getter.getChunkForLighting(targetX, targetZ);
+                    VoxelChunkColumn targetCol = (targetChunk instanceof VoxelLightChunkAdapter adapter) ? adapter.getColumn() : null;
+                    VoxelSection sec = (targetCol != null) ? targetCol.getSection(secY) : null;
+                    if (sec != null && sec.hasLightEmitters()) {
+                        rawBlockData[idx] = extractSectionLight(blockListener, targetX, secY, targetZ);
+                    } else {
+                        blockZeroMask |= (1L << idx);
+                    }
                 }
             }
         }
@@ -140,6 +174,31 @@ public final class QveLightingEngine {
                 skyFullMask, skyZeroMask, blockZeroMask,
                 rawSkyData, rawBlockData
         );
+    }
+
+    private static byte[] extractSectionLight(LayerLightEventListener listener, int chunkX, int sectionY, int chunkZ) {
+        byte[] data = new byte[2048];
+        int baseX = chunkX << 4;
+        int baseY = sectionY << 4;
+        int baseZ = chunkZ << 4;
+        BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
+
+        for (int ly = 0; ly < 16; ly++) {
+            for (int lz = 0; lz < 16; lz++) {
+                for (int lx = 0; lx < 16; lx++) {
+                    mpos.set(baseX + lx, baseY + ly, baseZ + lz);
+                    int light = listener.getLightValue(mpos);
+                    int index = (ly << 8) | (lz << 4) | lx;
+                    int byteIndex = index >> 1;
+                    if ((index & 1) == 0) {
+                        data[byteIndex] |= (byte) (light & 0x0F);
+                    } else {
+                        data[byteIndex] |= (byte) ((light & 0x0F) << 4);
+                    }
+                }
+            }
+        }
+        return data;
     }
 
     /**
