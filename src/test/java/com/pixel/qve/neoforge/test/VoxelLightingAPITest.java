@@ -187,4 +187,37 @@ public class VoxelLightingAPITest {
         assertEquals(15, lighting.getSkyLight(8, 100, 8), "Open sky must be 15");
         assertEquals(15, lighting.getSkyLight(8, 0, 8), "Open sky down to 0 must be 15");
     }
+
+    @Test
+    @DisplayName("Verify zero-allocation primitive bitmasks and raw byte buffer pruning")
+    void testZeroAllocationBitmasksAndPruning() {
+        VoxelChunkColumn column = new VoxelChunkColumn(2, 3, -4, 20);
+        VoxelChunkLighting lighting = VoxelLightingAPI.computeLighting(null, column);
+        assertInstanceOf(com.pixel.qve.neoforge.lighting.DefaultVoxelChunkLighting.class, lighting);
+        com.pixel.qve.neoforge.lighting.DefaultVoxelChunkLighting def =
+                (com.pixel.qve.neoforge.lighting.DefaultVoxelChunkLighting) lighting;
+
+        int secCount = 20 - (-4); // 24 sections
+        long expectedAllBits = (1L << secCount) - 1;
+
+        // In completely empty column:
+        // All sections have sky light 15 -> skyFullMask must have all 24 bits set!
+        assertEquals(expectedAllBits, def.getSkyFullMask(), "All sections in empty column must be marked full sky light in mask");
+        // All sections have block light 0 -> blockZeroMask must have all 24 bits set!
+        assertEquals(expectedAllBits, def.getBlockZeroMask(), "All sections in empty column must be marked zero block light in mask");
+
+        // Raw byte buffers should be completely unallocated (null) because all sections are homogeneous!
+        byte[][] rawSky = def.getRawSkyData();
+        if (rawSky != null) {
+            for (byte[] buf : rawSky) {
+                assertNull(buf, "Homogeneous sky sections must not allocate raw byte arrays");
+            }
+        }
+        byte[][] rawBlock = def.getRawBlockData();
+        if (rawBlock != null) {
+            for (byte[] buf : rawBlock) {
+                assertNull(buf, "Homogeneous block sections must not allocate raw byte arrays");
+            }
+        }
+    }
 }

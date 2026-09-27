@@ -53,7 +53,7 @@ public final class VoxelLightingAPI {
             return vcl;
         }
         MinecraftVoxelGrid grid = (level != null) ? MinecraftVoxelBridge.getOrCreateGrid(level) : null;
-        UnifiedLightChunkGetter getter = new UnifiedLightChunkGetter(level, grid, targetColumn);
+        UnifiedLightChunkGetter getter = UnifiedLightChunkGetter.getThreadLocal(level, grid, targetColumn);
         VoxelChunkLighting result = QveLightingEngine.computeLighting(getter);
         targetColumn.setCachedLighting(result);
         return result;
@@ -86,13 +86,12 @@ public final class VoxelLightingAPI {
         VoxelChunkColumn targetCol = grid.getColumn(chunkX, chunkZ);
 
         if (targetCol == null) {
-            // Unvisited chunk: return empty container with default sky light
+            // Unvisited chunk: return zero-allocation container with full sky daylight and zero block light
             int minSecY = level.getMinSection();
             int maxSecY = level.getMaxSection();
             int secCount = maxSecY - minSecY;
-            DataLayer[] emptySky = new DataLayer[secCount];
-            DataLayer[] emptyBlock = new DataLayer[secCount];
-            return new DefaultVoxelChunkLighting(chunkX, chunkZ, minSecY, maxSecY, emptySky, emptyBlock);
+            long fullMask = (secCount >= 64) ? -1L : ((1L << secCount) - 1);
+            return new DefaultVoxelChunkLighting(chunkX, chunkZ, minSecY, maxSecY, fullMask, 0L, fullMask, null, null);
         }
 
         return computeLighting(level, targetCol);

@@ -3,11 +3,14 @@ package com.pixel.qve.neoforge.lighting;
 import com.pixel.qve.neoforge.api.lighting.VoxelChunkLighting;
 import com.pixel.qve.neoforge.bridge.MinecraftVoxelGrid;
 import com.pixel.qve.world.VoxelChunkColumn;
+import com.pixel.qve.world.VoxelSection;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
+import net.minecraft.world.level.chunk.LightChunk;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import org.slf4j.Logger;
@@ -39,8 +42,10 @@ public final class QveLightingEngine {
         int targetZ = getter.getTargetZ();
         int minSecY = getter.getMinSectionY();
         int maxSecY = getter.getMaxSectionY();
+        int sectionCount = maxSecY - minSecY;
 
-        LevelLightEngine lightEngine = new LevelLightEngine(getter, true, true);
+        boolean hasBlockLight = getter.hasAnyLightEmitters();
+        LevelLightEngine lightEngine = new LevelLightEngine(getter, hasBlockLight, true);
 
         // 1. Enable lighting and mark all sections active across the 3x3 window
         for (int dx = -1; dx <= 1; dx++) {
@@ -49,6 +54,9 @@ public final class QveLightingEngine {
                 int cz = targetZ + dz;
                 ChunkPos cpos = new ChunkPos(cx, cz);
                 lightEngine.setLightEnabled(cpos, true);
+
+                LightChunk chunk = getter.getChunkForLighting(cx, cz);
+                VoxelChunkColumn col = (chunk instanceof VoxelLightChunkAdapter adapter) ? adapter.getColumn() : null;
 
                 // Include 1 extra section above and below to prevent boundary clamping artifacts
                 for (int secY = minSecY - 1; secY <= maxSecY + 1; secY++) {
@@ -78,25 +86,60 @@ public final class QveLightingEngine {
         }
 
         // 4. Extract the resulting DataLayers for the target chunk
-        int sectionCount = maxSecY - minSecY;
-        DataLayer[] skyLayers = new DataLayer[sectionCount];
-        DataLayer[] blockLayers = new DataLayer[sectionCount];
+        long skyFullMask = 0L;
+        long skyZeroMask = 0L;
+        long blockZeroMask = 0L;
+        byte[][] rawSkyData = new byte[sectionCount][];
+        byte[][] rawBlockData = new byte[sectionCount][];
 
         LayerLightEventListener skyListener = lightEngine.getLayerListener(LightLayer.SKY);
-        LayerLightEventListener blockListener = lightEngine.getLayerListener(LightLayer.BLOCK);
+        LayerLightEventListener blockListener = hasBlockLight ? lightEngine.getLayerListener(LightLayer.BLOCK) : null;
+
+        if (!hasBlockLight) {
+            blockZeroMask = (sectionCount >= 64) ? -1L : ((1L << sectionCount) - 1);
+        }
 
         for (int secY = minSecY; secY < maxSecY; secY++) {
             int idx = secY - minSecY;
             SectionPos sPos = SectionPos.of(targetX, secY, targetZ);
 
-            DataLayer sky = skyListener.getDataLayerData(sPos);
-            DataLayer block = blockListener.getDataLayerData(sPos);
+            DataLayer sky = (skyListener != null) ? skyListener.getDataLayerData(sPos) : null;
+            byte[] skyData = (sky != null) ? sky.getData() : null;
+            if (sky != null) {
+                if (sky.isDefinitelyFilledWith(15) || DefaultVoxelChunkLighting.isUniform(skyData, (byte) 0xFF)) {
+                    skyFullMask |= (1L << idx);
+                } else if (sky.isEmpty() || sky.isDefinitelyFilledWith(0) || DefaultVoxelChunkLighting.isUniform(skyData, (byte) 0x00)) {
+                    skyZeroMask |= (1L << idx);
+                } else {
+                    rawSkyData[idx] = skyData.clone();
+                }
+            } else {
+                int centerLight = (skyListener != null)
+                        ? skyListener.getLightValue(new BlockPos((targetX << 4) + 8, (secY << 4) + 8, (targetZ << 4) + 8))
+                        : 15;
+                if (centerLight >= 15) {
+                    skyFullMask |= (1L << idx);
+                } else {
+                    skyZeroMask |= (1L << idx);
+                }
+            }
 
-            skyLayers[idx] = (sky != null) ? sky.copy() : null;
-            blockLayers[idx] = (block != null) ? block.copy() : null;
+            if (hasBlockLight && blockListener != null) {
+                DataLayer block = blockListener.getDataLayerData(sPos);
+                byte[] blockData = (block != null) ? block.getData() : null;
+                if (block == null || block.isEmpty() || block.isDefinitelyFilledWith(0) || DefaultVoxelChunkLighting.isUniform(blockData, (byte) 0x00)) {
+                    blockZeroMask |= (1L << idx);
+                } else {
+                    rawBlockData[idx] = blockData.clone();
+                }
+            }
         }
 
-        return new DefaultVoxelChunkLighting(targetX, targetZ, minSecY, maxSecY, skyLayers, blockLayers);
+        return new DefaultVoxelChunkLighting(
+                targetX, targetZ, minSecY, maxSecY,
+                skyFullMask, skyZeroMask, blockZeroMask,
+                rawSkyData, rawBlockData
+        );
     }
 
     /**

@@ -21,24 +21,52 @@ import java.util.function.BiConsumer;
 /**
  * Lightweight, zero-overhead adapter presenting a QVE {@link VoxelChunkColumn} to Minecraft's
  * {@link LightChunk} interface for consumption by {@link net.minecraft.world.level.lighting.LevelLightEngine}.
+ * <p>
+ * Supports zero-allocation pooling by rebinding to new columns via {@link #bind(VoxelChunkColumn)}.
+ * </p>
  */
 public final class VoxelLightChunkAdapter implements LightChunk {
 
-    private final VoxelChunkColumn column;
-    private final int chunkX;
-    private final int chunkZ;
-    private final int minSectionY;
-    private final int maxSectionY;
-    private final int minBuildHeight;
-    private final int maxBuildHeight;
-    private final ChunkSkyLightSources skyLightSources;
+    private VoxelChunkColumn column;
+    private int chunkX;
+    private int chunkZ;
+    private int minSectionY;
+    private int maxSectionY;
+    private int minBuildHeight;
+    private int maxBuildHeight;
+    private ChunkSkyLightSources skyLightSources;
+    private final BlockPos.MutableBlockPos scratchBlockPos = new BlockPos.MutableBlockPos();
 
     /**
-     * Constructs a VoxelLightChunkAdapter wrapping the provided VoxelChunkColumn.
+     * Constructs an unbound VoxelLightChunkAdapter for thread-local pooling.
+     *
+     * @param minSectionY Minimum vertical section Y
+     * @param maxSectionY Maximum vertical section Y
+     */
+    public VoxelLightChunkAdapter(int minSectionY, int maxSectionY) {
+        this.minSectionY = minSectionY;
+        this.maxSectionY = maxSectionY;
+        this.minBuildHeight = minSectionY << 4;
+        this.maxBuildHeight = maxSectionY << 4;
+        this.skyLightSources = new ChunkSkyLightSources(this);
+    }
+
+    /**
+     * Constructs a VoxelLightChunkAdapter directly wrapping the provided VoxelChunkColumn.
      *
      * @param column VoxelChunkColumn to adapt
      */
     public VoxelLightChunkAdapter(VoxelChunkColumn column) {
+        this(column.getMinSectionY(), column.getMaxSectionY());
+        bind(column);
+    }
+
+    /**
+     * Rebinds this adapter to a new VoxelChunkColumn without allocating new bit storages or wrappers.
+     *
+     * @param column New VoxelChunkColumn to bind
+     */
+    public void bind(VoxelChunkColumn column) {
         this.column = Objects.requireNonNull(column, "column cannot be null");
         this.chunkX = column.getChunkX();
         this.chunkZ = column.getChunkZ();
@@ -46,12 +74,12 @@ public final class VoxelLightChunkAdapter implements LightChunk {
         this.maxSectionY = column.getMaxSectionY();
         this.minBuildHeight = minSectionY << 4;
         this.maxBuildHeight = maxSectionY << 4;
-
         this.skyLightSources = new ChunkSkyLightSources(this);
         initializeSkySources();
     }
 
     private void initializeSkySources() {
+        if (column == null) return;
         Heightmap2D hm = column.getHeightmap();
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
@@ -64,11 +92,34 @@ public final class VoxelLightChunkAdapter implements LightChunk {
         }
     }
 
+    /**
+     * Returns true if any section in this column is known to contain light emitting blocks.
+     *
+     * @return True if light emitters exist
+     */
+    public boolean hasLightEmitters() {
+        if (column == null) {
+            return false;
+        }
+        for (int secY = minSectionY; secY < maxSectionY; secY++) {
+            VoxelSection sec = column.getSection(secY);
+            if (sec != null && !sec.isEmpty() && sec.hasLightEmitters()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public VoxelChunkColumn getColumn() {
+        return column;
+    }
+
     @Override
     public void findBlockLightSources(BiConsumer<BlockPos, BlockState> consumer) {
+        if (column == null) return;
         int startWorldX = chunkX << 4;
         int startWorldZ = chunkZ << 4;
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        BlockPos.MutableBlockPos pos = scratchBlockPos;
 
         for (int secY = minSectionY; secY < maxSectionY; secY++) {
             VoxelSection sec = column.getSection(secY);
@@ -101,6 +152,9 @@ public final class VoxelLightChunkAdapter implements LightChunk {
 
     @Override
     public BlockState getBlockState(BlockPos pos) {
+        if (column == null) {
+            return Blocks.AIR.defaultBlockState();
+        }
         int y = pos.getY();
         if (y < minBuildHeight || y >= maxBuildHeight) {
             return Blocks.AIR.defaultBlockState();

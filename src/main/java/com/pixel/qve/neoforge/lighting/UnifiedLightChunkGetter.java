@@ -29,15 +29,50 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class UnifiedLightChunkGetter implements LightChunkGetter {
 
-    private final MinecraftVoxelGrid grid;
-    private final int targetX;
-    private final int targetZ;
-    private final int minSectionY;
-    private final int maxSectionY;
+    private static final ThreadLocal<UnifiedLightChunkGetter> POOL =
+            ThreadLocal.withInitial(UnifiedLightChunkGetter::new);
+
+    private MinecraftVoxelGrid grid;
+    private int targetX;
+    private int targetZ;
+    private int minSectionY;
+    private int maxSectionY;
     private final LightChunk[][] chunkCache = new LightChunk[3][3];
-    private final LightChunk emptyChunk;
+    private final VoxelLightChunkAdapter[][] localAdapters = new VoxelLightChunkAdapter[3][3];
+    private LightChunk emptyChunk;
     private final Map<Long, LightChunk> extendedCache = new ConcurrentHashMap<>();
     private final BlockGetter compositeLevel;
+
+    /**
+     * Retrieves or initializes a ThreadLocal instance of UnifiedLightChunkGetter bound
+     * to the specified target column and neighborhood.
+     *
+     * @param level        Minecraft Level context
+     * @param grid         MinecraftVoxelGrid instance
+     * @param targetColumn Central target chunk column to illuminate
+     * @return Bound ThreadLocal UnifiedLightChunkGetter
+     */
+    public static UnifiedLightChunkGetter getThreadLocal(Level level, MinecraftVoxelGrid grid, VoxelChunkColumn targetColumn) {
+        UnifiedLightChunkGetter getter = POOL.get();
+        getter.bind(level, grid, targetColumn);
+        return getter;
+    }
+
+    /**
+     * Unbound constructor used for ThreadLocal pooling.
+     */
+    public UnifiedLightChunkGetter() {
+        this.minSectionY = -4;
+        this.maxSectionY = 20;
+        this.emptyChunk = new VoxelLightChunkAdapter.EmptyLightChunk(-4, 20);
+        for (int x = 0; x < 3; x++) {
+            for (int z = 0; z < 3; z++) {
+                this.localAdapters[x][z] = new VoxelLightChunkAdapter(-4, 20);
+                this.chunkCache[x][z] = this.localAdapters[x][z];
+            }
+        }
+        this.compositeLevel = createCompositeLevel();
+    }
 
     /**
      * Constructs a UnifiedLightChunkGetter.
@@ -47,33 +82,81 @@ public final class UnifiedLightChunkGetter implements LightChunkGetter {
      * @param targetColumn Central target chunk column to illuminate
      */
     public UnifiedLightChunkGetter(Level level, MinecraftVoxelGrid grid, VoxelChunkColumn targetColumn) {
+        this();
+        bind(level, grid, targetColumn);
+    }
+
+    /**
+     * Rebinds this getter and its pre-allocated adapters to a new target column and grid context.
+     *
+     * @param level        Minecraft Level context
+     * @param grid         MinecraftVoxelGrid instance
+     * @param targetColumn Central target chunk column to illuminate
+     */
+    public void bind(Level level, MinecraftVoxelGrid grid, VoxelChunkColumn targetColumn) {
         Objects.requireNonNull(targetColumn, "targetColumn cannot be null");
         this.grid = grid;
         this.targetX = targetColumn.getChunkX();
         this.targetZ = targetColumn.getChunkZ();
-        this.minSectionY = targetColumn.getMinSectionY();
-        this.maxSectionY = targetColumn.getMaxSectionY();
-        this.emptyChunk = new VoxelLightChunkAdapter.EmptyLightChunk(minSectionY, maxSectionY);
+        int newMin = targetColumn.getMinSectionY();
+        int newMax = targetColumn.getMaxSectionY();
+        this.extendedCache.clear();
 
-        // Pre-populate 3x3 neighborhood
+        if (newMin != this.minSectionY || newMax != this.maxSectionY) {
+            this.minSectionY = newMin;
+            this.maxSectionY = newMax;
+            this.emptyChunk = new VoxelLightChunkAdapter.EmptyLightChunk(minSectionY, maxSectionY);
+            for (int x = 0; x < 3; x++) {
+                for (int z = 0; z < 3; z++) {
+                    this.localAdapters[x][z] = new VoxelLightChunkAdapter(minSectionY, maxSectionY);
+                }
+            }
+        }
+
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 int cx = targetX + dx;
                 int cz = targetZ + dz;
+                VoxelLightChunkAdapter adapter = localAdapters[dx + 1][dz + 1];
                 if (dx == 0 && dz == 0) {
-                    chunkCache[dx + 1][dz + 1] = new VoxelLightChunkAdapter(targetColumn);
+                    adapter.bind(targetColumn);
+                    chunkCache[1][1] = adapter;
                 } else if (grid != null) {
                     VoxelChunkColumn neighbor = grid.getColumn(cx, cz);
-                    chunkCache[dx + 1][dz + 1] = (neighbor != null)
-                            ? new VoxelLightChunkAdapter(neighbor)
-                            : emptyChunk;
+                    if (neighbor != null) {
+                        adapter.bind(neighbor);
+                        chunkCache[dx + 1][dz + 1] = adapter;
+                    } else {
+                        chunkCache[dx + 1][dz + 1] = emptyChunk;
+                    }
                 } else {
                     chunkCache[dx + 1][dz + 1] = emptyChunk;
                 }
             }
         }
+    }
 
-        this.compositeLevel = new BlockGetter() {
+    /**
+     * Returns true if any chunk in the active 3x3 window contains light-emitting blocks.
+     *
+     * @return True if at least one emitter exists in the 3x3 neighborhood
+     */
+    public boolean hasAnyLightEmitters() {
+        for (int x = 0; x < 3; x++) {
+            for (int z = 0; z < 3; z++) {
+                LightChunk chunk = chunkCache[x][z];
+                if (chunk instanceof VoxelLightChunkAdapter adapter) {
+                    if (adapter.hasLightEmitters()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private BlockGetter createCompositeLevel() {
+        return new BlockGetter() {
             @Override
             public BlockState getBlockState(BlockPos pos) {
                 LightChunk chunk = getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
@@ -113,7 +196,9 @@ public final class UnifiedLightChunkGetter implements LightChunkGetter {
         int dx = column.getChunkX() - targetX;
         int dz = column.getChunkZ() - targetZ;
         if (dx >= -1 && dx <= 1 && dz >= -1 && dz <= 1) {
-            chunkCache[dx + 1][dz + 1] = new VoxelLightChunkAdapter(column);
+            VoxelLightChunkAdapter adapter = localAdapters[dx + 1][dz + 1];
+            adapter.bind(column);
+            chunkCache[dx + 1][dz + 1] = adapter;
         }
     }
 
