@@ -95,7 +95,7 @@ public final class ChunkExclusivityGuard {
      * @param level Minecraft Level
      * @param rx    Region X (chunkX >> 5)
      * @param rz    Region Z (chunkZ >> 5)
-     * @return True if region has active chunks or open RegionFile handle
+     * @return True if region has active chunks loaded or pending in RAM
      */
     public static boolean isRegionActiveInRam(Level level, int rx, int rz) {
         if (level == null) return false;
@@ -107,27 +107,7 @@ public final class ChunkExclusivityGuard {
             ChunkMap chunkMap = scc.chunkMap;
             if (chunkMap == null) return false;
 
-            // 1. Check if Minecraft's RegionFileStorage currently has an active open handle for this region
-            try {
-                net.minecraft.world.level.chunk.storage.IOWorker worker = ((com.pixel.qve.neoforge.mixin.ChunkStorageAccessor) chunkMap).qve$getWorker();
-                if (worker != null) {
-                    net.minecraft.world.level.chunk.storage.RegionFileStorage storage = ((com.pixel.qve.neoforge.mixin.IOWorkerAccessor) worker).qve$getStorage();
-                    if (storage != null) {
-                        var cache = ((com.pixel.qve.neoforge.mixin.RegionFileStorageAccessor) (Object) storage).qve$getRegionCache();
-                        if (cache != null) {
-                            long rKey = ChunkPos.asLong(rx, rz);
-                            synchronized (cache) {
-                                if (cache.containsKey(rKey)) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-
-            // 2. Check if any chunk tracked in visibleChunkMap, updatingChunkMap, or pendingUnloads falls in this region
+            // Check if any chunk tracked in visibleChunkMap, updatingChunkMap, or pendingUnloads falls in this region
             try {
                 com.pixel.qve.neoforge.mixin.ChunkMapAccessor accessor = (com.pixel.qve.neoforge.mixin.ChunkMapAccessor) chunkMap;
                 var visible = accessor.qve$getVisibleChunkMap();

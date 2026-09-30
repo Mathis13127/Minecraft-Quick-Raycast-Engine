@@ -18,9 +18,6 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 
-import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
-import com.pixel.qve.neoforge.api.ChunkWriteBatch;
-import com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -136,94 +133,12 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
             diskSection = diskFallback.getSection(sectionX, sectionY, sectionZ);
         }
 
-        // Overlay deferred mutations from DeferredChunkQueue if present
-        if (DeferredChunkQueue.hasEdits(level, sectionX, sectionZ)) {
-            diskSection = overlayDeferredEdits(sectionX, sectionY, sectionZ, diskSection);
-        }
-
         if (diskSection != null) {
             cache.putSection(sectionX, sectionY, sectionZ, diskSection);
             return diskSection;
         }
 
         return null;
-    }
-
-    private VoxelSection overlayDeferredEdits(int sectionX, int sectionY, int sectionZ, VoxelSection baseSection) {
-        ChunkWriteBatch.ChunkEdits edits = DeferredChunkQueue.peekEdits(level, sectionX, sectionZ);
-        if (edits == null) {
-            return baseSection;
-        }
-
-        VoxelSection whole = edits.getWholeSections().get(sectionY);
-        if (whole != null) {
-            return whole;
-        }
-
-        PrimitiveMutationBuffer pmb = edits.getMutationBuffer();
-        if (pmb != null && !pmb.isEmpty()) {
-            int bit = sectionY + 16;
-            if (bit >= 0 && bit < 32 && (pmb.getModifiedSectionMask() & (1 << bit)) == 0) {
-                return baseSection;
-            }
-            VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
-            int secMinY = sectionY << 4;
-            int secMaxY = secMinY + 15;
-            for (int i = 0, size = pmb.size(); i < size; i++) {
-                if (pmb.intersectsSection(i, sectionY)) {
-                    int bMinX = pmb.minX(i);
-                    int bMaxX = pmb.maxX(i);
-                    int bMinZ = pmb.minZ(i);
-                    int bMaxZ = pmb.maxZ(i);
-                    int bMinY = Math.max(secMinY, pmb.minY(i));
-                    int bMaxY = Math.min(secMaxY, pmb.maxY(i));
-                    int targetId = pmb.targetBlockId(i);
-                    int filterId = pmb.filterBlockId(i);
-                    int localMinY = bMinY & 15;
-                    int localMaxY = bMaxY & 15;
-
-                    for (int y = localMinY; y <= localMaxY; y++) {
-                        for (int z = bMinZ; z <= bMaxZ; z++) {
-                            for (int x = bMinX; x <= bMaxX; x++) {
-                                int curId = copy.getBlockId(x, y, z);
-                                if (filterId < 0 || curId == filterId) {
-                                    copy.setVoxel(x, y, z, targetId != 0, targetId);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return copy;
-        }
-
-        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
-        boolean hasAny = false;
-        for (int i = 0, size = mutations.size(); i < size; i++) {
-            if ((mutations.get(i).worldY() >> 4) == sectionY) {
-                hasAny = true;
-                break;
-            }
-        }
-
-        if (!hasAny) {
-            return baseSection;
-        }
-
-        VoxelSection copy = (baseSection != null) ? baseSection.copy() : new VoxelSection();
-        for (int i = 0, size = mutations.size(); i < size; i++) {
-            ChunkWriteBatch.BlockMutation m = mutations.get(i);
-            if ((m.worldY() >> 4) == sectionY) {
-                int lx = m.worldX() & 15;
-                int ly = m.worldY() & 15;
-                int lz = m.worldZ() & 15;
-                int curId = copy.getBlockId(lx, ly, lz);
-                if (m.matchesFilter(curId, null)) {
-                    copy.setVoxel(lx, ly, lz, m.targetBlockId() != 0, m.targetBlockId());
-                }
-            }
-        }
-        return copy;
     }
 
     @Override

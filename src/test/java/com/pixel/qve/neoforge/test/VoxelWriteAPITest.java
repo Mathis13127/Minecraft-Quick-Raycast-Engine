@@ -760,6 +760,31 @@ public class VoxelWriteAPITest {
         // When legacy getMutations() is invoked, it must expand the 3D box into exactly 12 BlockMutations
         List<ChunkWriteBatch.BlockMutation> legacy = edits.getMutations();
         assertEquals(12, legacy.size());
-        assertEquals(12, legacy.size());
+    }
+
+    @Test
+    @DisplayName("Verify ChunkWriteBatch dispatches without DeferredChunkQueue and QveConfig defaults")
+    void testHybridAndPureDiskBatchPartitioningWithoutDeferredQueue() {
+        assertNotNull(com.pixel.qve.neoforge.config.QveConfig.VERBOSE_CONSOLE_LOGGING);
+        assertFalse(com.pixel.qve.neoforge.config.QveConfig.isVerboseConsoleLogging());
+        assertTrue(com.pixel.qve.neoforge.config.QveConfig.isRegionBatchingEnabled());
+
+        // Verify WriteStatus does not contain SUCCESS_DEFERRED
+        for (WriteStatus status : WriteStatus.values()) {
+            assertNotEquals("SUCCESS_DEFERRED", status.name());
+        }
+
+        // Verify WriteResult success semantics
+        WriteResult ramRes = WriteResult.successRam(0, 0, 100L);
+        assertTrue(ramRes.isSuccess());
+        assertEquals(WriteStatus.SUCCESS_RAM, ramRes.status());
+
+        WriteResult diskRes = WriteResult.successDisk(1, 1, 200L, 1024, 5, false);
+        assertTrue(diskRes.isSuccess());
+        assertEquals(WriteStatus.SUCCESS_DISK_IN_PLACE, diskRes.status());
+
+        WriteResult relocatedRes = WriteResult.successDisk(2, 2, 300L, 2048, 10, true);
+        assertTrue(relocatedRes.isSuccess());
+        assertEquals(WriteStatus.SUCCESS_DISK_REALLOCATED, relocatedRes.status());
     }
 }

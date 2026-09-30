@@ -152,8 +152,10 @@ public final class MinecraftRegionFileBridge {
                                 regionFile.close();
                                 int rx = ChunkPos.getX(key);
                                 int rz = ChunkPos.getZ(key);
-                                LOGGER.info("Evicted and closed active RegionFile handle for r.{}.{}.mca in dimension {}",
-                                        rx, rz, serverLevel.dimension().location());
+                                if (com.pixel.qve.neoforge.config.QveConfig.isVerboseConsoleLogging()) {
+                                    LOGGER.info("Evicted and closed active RegionFile handle for r.{}.{}.mca in dimension {}",
+                                            rx, rz, serverLevel.dimension().location());
+                                }
                             } catch (IOException e) {
                                 LOGGER.warn("Failed to close evicted RegionFile for key {}: {}", key, e.getMessage(), e);
                             }

@@ -123,36 +123,14 @@ public class QuickVoxelEngineMod {
     }
 
     /**
-     * Intercepts chunk loads to seamlessly apply any pending deferred mutations
-     * that were queued while this chunk was offline in a hybrid region.
-     *
-     * @param event Chunk load event
-     */
-    @SubscribeEvent
-    public void onChunkLoad(ChunkEvent.Load event) {
-        if (!event.getLevel().isClientSide() && event.getChunk() instanceof net.minecraft.world.level.chunk.LevelChunk lc) {
-            int cx = lc.getPos().x;
-            int cz = lc.getPos().z;
-            if (com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue.hasEdits(lc.getLevel(), cx, cz)) {
-                com.pixel.qve.neoforge.api.ChunkWriteBatch.ChunkEdits edits =
-                        com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue.pollEdits(lc.getLevel(), cx, cz);
-                if (edits != null) {
-                    com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue.applyToChunk(lc, edits);
-                }
-            }
-        }
-    }
-
-    /**
-     * Cleans up all static state, flushes deferred chunk edits to disk, and cleanly terminates writers on server shutdown.
+     * Cleans up all static state and cleanly terminates writers on server shutdown.
      *
      * @param event Server stopped event
      */
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
-        com.pixel.qve.neoforge.bridge.writer.DeferredChunkQueue.flushAllToDisk(event.getServer());
         com.pixel.qve.neoforge.api.VoxelWriteAPI.onServerStopping(event.getServer());
         MinecraftVoxelBridge.reset();
-        LOGGER.info("[RaycastEngine] Flushed deferred chunks and cleanly stopped writers on server stop.");
+        LOGGER.info("[RaycastEngine] Cleanly stopped writers on server stop.");
     }
 }

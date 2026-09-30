@@ -183,8 +183,6 @@ public final class QveWriteCommand {
                     double ms = res.durationNanos() / 1_000_000.0;
                     String backendUsed = (res.status() == WriteStatus.SUCCESS_RAM)
                             ? "§aRAM Live (LevelChunk)"
-                            : (res.status() == WriteStatus.SUCCESS_DEFERRED)
-                            ? "§dDeferred Queue (Hybrid Region)"
                             : "§bAnvil MCA Disk (Offline)";
 
                     String verifyStr;
@@ -267,10 +265,7 @@ public final class QveWriteCommand {
                     double throughput = res.throughputBlocksPerSecond();
                     long ramCount = res.results().stream().filter(r -> r.status() == WriteStatus.SUCCESS_RAM).count();
                     long diskCount = res.results().stream().filter(r -> r.status() == WriteStatus.SUCCESS_DISK_IN_PLACE || r.status() == WriteStatus.SUCCESS_DISK_REALLOCATED).count();
-                    long defCount = res.results().stream().filter(r -> r.status() == WriteStatus.SUCCESS_DEFERRED).count();
-                    String distStr = (defCount > 0)
-                            ? String.format("RAM: §a%d§7, Disk: §b%d§7, Deferred: §d%d§7", ramCount, diskCount, defCount)
-                            : String.format("RAM: §a%d§7, Disk: §b%d§7", ramCount, diskCount);
+                    String distStr = String.format("RAM: §a%d§7, Disk: §b%d§7", ramCount, diskCount);
                     source.sendSuccess(() -> Component.literal(String.format(
                             "§a=== [Quick Voxel Engine: Batch Fill SUCCESS] ===\n" +
                             "§7Total Voxels: §f%,d §7| Chunks: §e%,d §7(%s)\n" +

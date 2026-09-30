@@ -150,29 +150,6 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
             return setBlockRamAsync(pos, state, flags, blockEntityNbt);
-        } else if (getIOWorker() == null && ChunkExclusivityGuard.isRegionActiveInRam(level, cx >> 5, cz >> 5)) {
-            ChunkWriteBatch.ChunkEdits edits = new ChunkWriteBatch.ChunkEdits(cx, cz);
-            byte[] rawNbt = null;
-            if (blockEntityNbt != null) {
-                try {
-                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                    net.minecraft.nbt.NbtIo.write(blockEntityNbt, new java.io.DataOutputStream(baos));
-                    rawNbt = baos.toByteArray();
-                } catch (Exception e) {
-                    LOGGER.warn("Failed to serialize BE NBT for pos {}: {}", pos, e.getMessage());
-                }
-            }
-            edits.addMutation(new ChunkWriteBatch.BlockMutation(
-                    pos.getX(), pos.getY(), pos.getZ(),
-                    MinecraftVoxelBridge.getBlockId(state),
-                    state,
-                    rawNbt,
-                    blockEntityNbt,
-                    -1,
-                    null
-            ));
-            DeferredChunkQueue.enqueue(level, edits);
-            return CompletableFuture.completedFuture(WriteResult.successDeferred(cx, cz, 0L));
         } else {
             return setBlockDirectAsync(pos, state, blockEntityNbt);
         }
@@ -180,8 +157,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
     /**
      * Modifies or creates a chunk without concern for whether it is currently loaded in RAM or unloaded on disk.
-     * If the chunk is unloaded within an active hybrid region, mutations are queued in {@link DeferredChunkQueue}
-     * to prevent Anvil header collisions.
+     * Routes directly to RAM mutation or direct disk/IOWorker write.
      *
      * @param chunkX   World chunk X
      * @param chunkZ   World chunk Z
@@ -191,46 +167,6 @@ public final class MinecraftVoxelWriter implements Closeable {
     public CompletableFuture<WriteResult> modifyChunkUnifiedAsync(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, chunkX, chunkZ)) {
             return modifyChunkRamAsync(chunkX, chunkZ, modifier);
-        } else if (getIOWorker() == null && ChunkExclusivityGuard.isRegionActiveInRam(level, chunkX >> 5, chunkZ >> 5)) {
-            long t0 = System.nanoTime();
-            try {
-                ChunkWriteContext context = prepareChunkContext(chunkX, chunkZ, null, null, modifier);
-                ChunkWriteBatch.ChunkEdits edits = new ChunkWriteBatch.ChunkEdits(chunkX, chunkZ);
-                int minSec = level.getMinSection();
-                int mask = context.getModifiedSectionMask();
-                for (Map.Entry<Integer, VoxelSection> secEntry : context.getSections().entrySet()) {
-                    int sy = secEntry.getKey();
-                    if ((mask & (1 << (sy - minSec))) != 0) {
-                        edits.setSection(sy, secEntry.getValue());
-                    }
-                }
-                for (Map.Entry<Long, byte[]> beEntry : context.getBlockEntities().entrySet()) {
-                    long key = beEntry.getKey();
-                    int lx = (int) (key & 0xF);
-                    int lz = (int) ((key >> 4) & 0xF);
-                    int wy = (int) ((short) (key >> 8));
-                    byte[] rawNbt = beEntry.getValue();
-                    CompoundTag tag = null;
-                    if (rawNbt != null) {
-                        try {
-                            tag = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
-                        } catch (Exception e) {
-                            LOGGER.warn("Failed to parse BE NBT in modifyChunkUnifiedAsync for ({}, {}): {}", chunkX, chunkZ, e.getMessage());
-                        }
-                    }
-                    int bId = context.getBlock(lx, wy, lz);
-                    BlockState bs = MinecraftVoxelBridge.getBlockState(bId);
-                    edits.addMutation(new ChunkWriteBatch.BlockMutation(
-                            (chunkX << 4) | lx, wy, (chunkZ << 4) | lz,
-                            bId, bs, rawNbt, tag, -1, null
-                    ));
-                }
-                DeferredChunkQueue.enqueue(level, edits);
-                return CompletableFuture.completedFuture(WriteResult.successDeferred(chunkX, chunkZ, System.nanoTime() - t0));
-            } catch (Throwable t) {
-                LOGGER.error("Failed to apply modifier to deferred chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage(), t);
-                return CompletableFuture.completedFuture(WriteResult.failure(WriteStatus.FAIL_IO_ERROR, chunkX, chunkZ, t.getMessage()));
-            }
         } else {
             return writeChunkDirectAsync(chunkX, chunkZ, modifier);
         }
@@ -615,6 +551,41 @@ public final class MinecraftVoxelWriter implements Closeable {
             modifier.accept(context);
         }
         return context;
+    }
+
+    /**
+     * Executes a heterogeneous batch of chunk writes across arbitrary regions, automatically grouping by region.
+     *
+     * @param editsList List of ChunkEdits targeting any regions
+     * @param options   WriteOptions governing execution
+     * @return CompletableFuture completing with list of WriteResults
+     */
+    public CompletableFuture<List<WriteResult>> writeBatchAsync(List<ChunkWriteBatch.ChunkEdits> editsList, WriteOptions options) {
+        if (editsList == null || editsList.isEmpty()) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+
+        Map<Long, List<ChunkWriteBatch.ChunkEdits>> byRegion = new HashMap<>();
+        for (ChunkWriteBatch.ChunkEdits edits : editsList) {
+            long rKey = ChunkPos.asLong(edits.getChunkX() >> 5, edits.getChunkZ() >> 5);
+            byRegion.computeIfAbsent(rKey, k -> new ArrayList<>()).add(edits);
+        }
+
+        List<CompletableFuture<List<WriteResult>>> futures = new ArrayList<>(byRegion.size());
+        for (Map.Entry<Long, List<ChunkWriteBatch.ChunkEdits>> entry : byRegion.entrySet()) {
+            int rx = ChunkPos.getX(entry.getKey());
+            int rz = ChunkPos.getZ(entry.getKey());
+            futures.add(writeRegionBatchAsync(rx, rz, entry.getValue(), options));
+        }
+
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> {
+                    List<WriteResult> res = new ArrayList<>(editsList.size());
+                    for (CompletableFuture<List<WriteResult>> f : futures) {
+                        res.addAll(f.join());
+                    }
+                    return res;
+                });
     }
 
     /**

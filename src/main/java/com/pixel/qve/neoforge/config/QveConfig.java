@@ -14,6 +14,7 @@ public final class QveConfig {
     public static final ModConfigSpec.BooleanValue REGION_BATCHING_ENABLED;
     public static final ModConfigSpec.IntValue COMPRESSION_LEVEL;
     public static final ModConfigSpec.BooleanValue ASYNC_VERIFICATION_ENABLED;
+    public static final ModConfigSpec.BooleanValue VERBOSE_CONSOLE_LOGGING;
 
     static {
         BUILDER.push("write_pipeline");
@@ -41,10 +42,31 @@ public final class QveConfig {
                         "rather than stalling the write pipeline.")
                 .define("asyncVerificationEnabled", true);
 
+        VERBOSE_CONSOLE_LOGGING = BUILDER
+                .comment("Whether to emit verbose per-operation debug logging to the server console during write operations.",
+                        "Kept false by default to prevent console spam and I/O lag.")
+                .define("verboseConsoleLogging", false);
+
         BUILDER.pop();
     }
 
     public static final ModConfigSpec SPEC = BUILDER.build();
+
+    public static boolean isVerboseConsoleLogging() {
+        try {
+            return VERBOSE_CONSOLE_LOGGING != null && VERBOSE_CONSOLE_LOGGING.get();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public static boolean isRegionBatchingEnabled() {
+        try {
+            return REGION_BATCHING_ENABLED != null && REGION_BATCHING_ENABLED.get();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
 
     /**
      * Applies configured values to the underlying MCA writer and verifier engines.
