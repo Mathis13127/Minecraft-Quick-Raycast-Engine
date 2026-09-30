@@ -57,6 +57,8 @@ public final class PalettedContainerBuilder {
 
         int[] blockIds = voxelSection.getBlockIds();
         if (blockIds != null) {
+            int lastId = -1;
+            BlockState lastState = null;
             for (int y = 0; y < 16; y++) {
                 int yOffset = y << 8;
                 for (int z = 0; z < 16; z++) {
@@ -65,7 +67,14 @@ public final class PalettedContainerBuilder {
                         int idx = yzOffset | x;
                         int id = blockIds[idx];
                         if (id != BlockIdRegistry.AIR_ID) {
-                            BlockState state = MinecraftVoxelBridge.getBlockState(id);
+                            BlockState state;
+                            if (id == lastId) {
+                                state = lastState;
+                            } else {
+                                state = MinecraftVoxelBridge.getBlockState(id);
+                                lastId = id;
+                                lastState = state;
+                            }
                             if (state != null && !state.isAir()) {
                                 container.set(x, y, z, state);
                             }

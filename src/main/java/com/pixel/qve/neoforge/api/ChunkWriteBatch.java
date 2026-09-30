@@ -373,7 +373,8 @@ public final class ChunkWriteBatch {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 net.minecraft.nbt.NbtIo.write(blockEntityNbt, new DataOutputStream(baos));
                 rawNbt = baos.toByteArray();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                LOGGER.error("Failed to serialize BlockEntity NBT at ({}, {}, {}): {}", x, y, z, e.getMessage(), e);
             }
         }
 

@@ -95,9 +95,9 @@ public final class NbtChunkModifier {
             // Overlay sparse mutations onto effective sections
             if (mutations != null && !mutations.isEmpty()) {
                 for (int i = 0, sz = mutations.size(); i < sz; i++) {
-                    int wy = mutations.worldY(i);
-                    int sy = wy >> 4;
-                    if (sy >= minSectionY && sy <= maxSectionY) {
+                    int bMinSy = Math.max(minSectionY, mutations.minY(i) >> 4);
+                    int bMaxSy = Math.min(maxSectionY, mutations.maxY(i) >> 4);
+                    for (int sy = bMinSy; sy <= bMaxSy; sy++) {
                         int bMinX = mutations.minX(i);
                         int bMaxX = mutations.maxX(i);
                         int bMinZ = mutations.minZ(i);

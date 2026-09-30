@@ -62,6 +62,45 @@ public final class ChunkEditsApplicator {
     public static int applyToLiveChunk(ServerLevel level, LevelChunk chunk, ChunkWriteBatch.ChunkEdits edits, List<AppliedRamMutation> rollbackRecord) {
         if (level == null || chunk == null || edits == null) return 0;
 
+        int appliedCount = applyEditsInternal(chunk, edits);
+
+        // Broadcast instant packet to tracking players
+        ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(
+                chunk,
+                level.getLightEngine(),
+                null,
+                null
+        );
+        List<ServerPlayer> players = level.getChunkSource().chunkMap.getPlayers(chunk.getPos(), false);
+        for (ServerPlayer player : players) {
+            player.connection.send(packet);
+        }
+
+        return appliedCount;
+    }
+
+    /**
+     * Applies edits to a newly loaded chunk during chunk load interception (e.g. {@code ChunkEvent.Load}).
+     * Performs atomic pointer swaps directly on the LevelChunk before client packet dispatch.
+     *
+     * @param chunk Target LevelChunk
+     * @param edits Queued ChunkEdits
+     * @return Number of blocks successfully mutated
+     */
+    public static int applyToLoadingChunk(LevelChunk chunk, ChunkWriteBatch.ChunkEdits edits) {
+        if (chunk == null || edits == null) return 0;
+        return applyEditsInternal(chunk, edits);
+    }
+
+    /**
+     * Internal unified execution engine applying section pointer swaps and block mutations to a LevelChunk.
+     *
+     * @param chunk Target LevelChunk
+     * @param edits ChunkEdits container
+     * @return Number of blocks successfully mutated
+     */
+    private static int applyEditsInternal(LevelChunk chunk, ChunkWriteBatch.ChunkEdits edits) {
+        var level = chunk.getLevel();
         int appliedCount = 0;
         Set<Integer> modifiedSections = new HashSet<>();
 
@@ -181,7 +220,10 @@ public final class ChunkEditsApplicator {
                                                     be.loadWithComponents(tag, level.registryAccess());
                                                     be.setChanged();
                                                 }
-                                            } catch (Exception ignored) {}
+                                            } catch (Exception e) {
+                                                LOGGER.warn("Failed to load raw BlockEntity NBT for chunk ({}, {}) at ({}, {}, {}): {}",
+                                                        edits.getChunkX(), edits.getChunkZ(), (edits.getChunkX() << 4) | x, y, (edits.getChunkZ() << 4) | z, e.getMessage(), e);
+                                            }
                                         }
                                     }
                                 }
@@ -204,11 +246,16 @@ public final class ChunkEditsApplicator {
                         appliedCount++;
 
                         if (m.tagNbt() != null) {
-                            BlockPos bePos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
-                            BlockEntity be = chunk.getBlockEntity(bePos, LevelChunk.EntityCreationType.IMMEDIATE);
-                            if (be != null) {
-                                be.loadWithComponents(m.tagNbt(), level.registryAccess());
-                                be.setChanged();
+                            try {
+                                BlockPos bePos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
+                                BlockEntity be = chunk.getBlockEntity(bePos, LevelChunk.EntityCreationType.IMMEDIATE);
+                                if (be != null) {
+                                    be.loadWithComponents(m.tagNbt(), level.registryAccess());
+                                    be.setChanged();
+                                }
+                            } catch (Exception e) {
+                                LOGGER.warn("Failed to load BlockEntity NBT from mutation at ({}, {}, {}): {}",
+                                        m.worldX(), m.worldY(), m.worldZ(), e.getMessage(), e);
                             }
                         }
                     }
@@ -231,207 +278,6 @@ public final class ChunkEditsApplicator {
 
         // 3. Mark chunk dirty and sync QVE spatial cache
         chunk.setUnsaved(true);
-        MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
-        if (grid != null) {
-            grid.getCache().invalidateChunk(edits.getChunkX(), edits.getChunkZ());
-            VoxelChunkColumn col = grid.getColumn(edits.getChunkX(), edits.getChunkZ());
-            if (col != null) {
-                grid.syncHeightmapFromChunk(chunk, col, edits.getChunkX(), edits.getChunkZ());
-            }
-        }
-
-        // 4. Broadcast instant packet to tracking players
-        ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(
-                chunk,
-                level.getLightEngine(),
-                null,
-                null
-        );
-        List<ServerPlayer> players = level.getChunkSource().chunkMap.getPlayers(chunk.getPos(), false);
-        for (ServerPlayer player : players) {
-            player.connection.send(packet);
-        }
-
-        return appliedCount;
-    }
-
-    /**
-     * Applies edits to a newly loaded chunk during chunk load interception (e.g. {@code ChunkEvent.Load}).
-     * Performs atomic pointer swaps directly on the LevelChunk before client packet dispatch.
-     *
-     * @param chunk Target LevelChunk
-     * @param edits Queued ChunkEdits
-     * @return Number of blocks successfully mutated
-     */
-    public static int applyToLoadingChunk(LevelChunk chunk, ChunkWriteBatch.ChunkEdits edits) {
-        if (chunk == null || edits == null) return 0;
-
-        int appliedCount = 0;
-        Set<Integer> modifiedSections = new HashSet<>();
-
-        // 1. Whole sections
-        for (Map.Entry<Integer, VoxelSection> secEntry : edits.getWholeSections().entrySet()) {
-            int secY = secEntry.getKey();
-            VoxelSection vs = secEntry.getValue();
-            int secIdx = chunk.getSectionIndex(secY << 4);
-            if (secIdx < 0 || secIdx >= chunk.getSections().length) continue;
-
-            LevelChunkSection sec = chunk.getSections()[secIdx];
-            if (sec == null) {
-                sec = new LevelChunkSection(chunk.getLevel().registryAccess().registryOrThrow(Registries.BIOME));
-                chunk.getSections()[secIdx] = sec;
-            }
-
-            PalettedContainer<BlockState> newContainer = PalettedContainerBuilder.buildFromVoxelSection(vs);
-            if (sec instanceof IRaycastChunkSection bridge) {
-                bridge.raycast$setStates(newContainer);
-                sec.recalcBlockCounts();
-                bridge.raycast$setVoxelSection(vs);
-                VoxelChunkColumn col = bridge.raycast$getVoxelColumn();
-                if (col != null) {
-                    col.setSection(secY, vs);
-                    col.setCachedLighting(null);
-                }
-            }
-            modifiedSections.add(secY);
-            appliedCount += VoxelSection.VOXEL_COUNT;
-        }
-
-        // 2. Block mutations and bounding boxes (grouped by section Y)
-        PrimitiveMutationBuffer mutationBuf = edits.getMutationBuffer();
-        Set<Integer> sparseSectionYs = new HashSet<>();
-        if (mutationBuf != null && !mutationBuf.isEmpty()) {
-            int minSec = chunk.getLevel().getMinSection();
-            int maxSec = chunk.getLevel().getMinSection() + chunk.getLevel().getSectionsCount() - 1;
-            for (int sy = minSec; sy <= maxSec; sy++) {
-                if (modifiedSections.contains(sy)) continue;
-                for (int i = 0, sz = mutationBuf.size(); i < sz; i++) {
-                    if (mutationBuf.intersectsSection(i, sy)) {
-                        sparseSectionYs.add(sy);
-                        break;
-                    }
-                }
-            }
-        }
-
-        List<ChunkWriteBatch.BlockMutation> mutations = edits.getMutations();
-        if (!mutations.isEmpty()) {
-            for (ChunkWriteBatch.BlockMutation m : mutations) {
-                int sy = m.worldY() >> 4;
-                if (!modifiedSections.contains(sy)) {
-                    sparseSectionYs.add(sy);
-                }
-            }
-        }
-
-        for (int secY : sparseSectionYs) {
-            int secIdx = chunk.getSectionIndex(secY << 4);
-            if (secIdx < 0 || secIdx >= chunk.getSections().length) continue;
-
-            LevelChunkSection sec = chunk.getSections()[secIdx];
-            if (sec == null) {
-                sec = new LevelChunkSection(chunk.getLevel().registryAccess().registryOrThrow(Registries.BIOME));
-                chunk.getSections()[secIdx] = sec;
-            }
-
-            IRaycastChunkSection bridge = (sec instanceof IRaycastChunkSection b) ? b : null;
-            PalettedContainer<BlockState> newContainer = PalettedContainerBuilder.cloneOrNew(
-                    (bridge != null) ? bridge.raycast$getStates() : null
-            );
-
-            VoxelSection vs = (bridge != null) ? bridge.raycast$getVoxelSection() : null;
-            if (vs == null || vs == VoxelSection.EMPTY) {
-                vs = new VoxelSection();
-            } else {
-                vs = vs.copy();
-            }
-
-            int secMinY = secY << 4;
-            int secMaxY = secMinY + 15;
-
-            if (mutationBuf != null && !mutationBuf.isEmpty()) {
-                for (int i = 0, sz = mutationBuf.size(); i < sz; i++) {
-                    if (mutationBuf.intersectsSection(i, secY)) {
-                        int bMinX = mutationBuf.minX(i);
-                        int bMaxX = mutationBuf.maxX(i);
-                        int bMinZ = mutationBuf.minZ(i);
-                        int bMaxZ = mutationBuf.maxZ(i);
-                        int bMinY = Math.max(secMinY, mutationBuf.minY(i));
-                        int bMaxY = Math.min(secMaxY, mutationBuf.maxY(i));
-                        int targetId = mutationBuf.targetBlockId(i);
-                        int filterId = mutationBuf.filterBlockId(i);
-                        BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
-                        BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
-                        byte[] rawNbt = mutationBuf.rawNbt(i);
-
-                        for (int y = bMinY; y <= bMaxY; y++) {
-                            int ly = y & 15;
-                            for (int z = bMinZ; z <= bMaxZ; z++) {
-                                for (int x = bMinX; x <= bMaxX; x++) {
-                                    BlockState cur = newContainer.get(x, ly, z);
-                                    boolean matches = (filterId < 0) || (filterState != null && (cur == filterState || cur.getBlock() == filterState.getBlock()));
-                                    if (matches) {
-                                        newContainer.set(x, ly, z, (targetState != null) ? targetState : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-                                        vs.setVoxel(x, ly, z, targetId != BlockIdRegistry.AIR_ID, targetId);
-                                        appliedCount++;
-
-                                        if (rawNbt != null) {
-                                            try {
-                                                CompoundTag tag = net.minecraft.nbt.NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(rawNbt)));
-                                                BlockPos bePos = new BlockPos((edits.getChunkX() << 4) | x, y, (edits.getChunkZ() << 4) | z);
-                                                BlockEntity be = chunk.getBlockEntity(bePos, LevelChunk.EntityCreationType.IMMEDIATE);
-                                                if (be != null) {
-                                                    be.loadWithComponents(tag, chunk.getLevel().registryAccess());
-                                                    be.setChanged();
-                                                }
-                                            } catch (Exception ignored) {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (ChunkWriteBatch.BlockMutation m : mutations) {
-                if ((m.worldY() >> 4) == secY) {
-                    int lx = m.worldX() & 15;
-                    int ly = m.worldY() & 15;
-                    int lz = m.worldZ() & 15;
-                    BlockState cur = newContainer.get(lx, ly, lz);
-                    if (m.matchesFilter(-1, cur)) {
-                        newContainer.set(lx, ly, lz, m.targetState());
-                        vs.setVoxel(lx, ly, lz, m.targetBlockId() != BlockIdRegistry.AIR_ID, m.targetBlockId());
-                        appliedCount++;
-
-                        if (m.tagNbt() != null) {
-                            BlockPos bePos = new BlockPos(m.worldX(), m.worldY(), m.worldZ());
-                            BlockEntity be = chunk.getBlockEntity(bePos, LevelChunk.EntityCreationType.IMMEDIATE);
-                            if (be != null) {
-                                be.loadWithComponents(m.tagNbt(), chunk.getLevel().registryAccess());
-                                be.setChanged();
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (bridge != null) {
-                bridge.raycast$setStates(newContainer);
-                sec.recalcBlockCounts();
-                bridge.raycast$setVoxelSection(vs);
-                VoxelChunkColumn col = bridge.raycast$getVoxelColumn();
-                if (col != null) {
-                    col.setSection(secY, vs);
-                    col.setCachedLighting(null);
-                }
-            }
-            modifiedSections.add(secY);
-        }
-
-        chunk.setUnsaved(true);
-        var level = chunk.getLevel();
         MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
         if (grid != null) {
             grid.getCache().invalidateChunk(edits.getChunkX(), edits.getChunkZ());

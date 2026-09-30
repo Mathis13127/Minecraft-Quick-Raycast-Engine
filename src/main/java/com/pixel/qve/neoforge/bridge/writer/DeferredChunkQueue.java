@@ -111,7 +111,7 @@ public final class DeferredChunkQueue {
      * @return ChunkEdits if present, or null
      */
     public static ChunkWriteBatch.ChunkEdits pollEdits(Level level, int chunkX, int chunkZ) {
-        if (level == null) return false ? null : null;
+        if (level == null) return null;
         Long2ObjectOpenHashMap<ChunkWriteBatch.ChunkEdits> map = QUEUE.get(level.dimension());
         if (map == null) return null;
 
