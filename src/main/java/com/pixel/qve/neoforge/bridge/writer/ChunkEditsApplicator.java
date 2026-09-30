@@ -170,13 +170,14 @@ public final class ChunkEditsApplicator {
             }
 
             IRaycastChunkSection bridge = (sec instanceof IRaycastChunkSection b) ? b : null;
-            PalettedContainer<BlockState> newContainer = PalettedContainerBuilder.cloneOrNew(
-                    (bridge != null) ? bridge.raycast$getStates() : null
-            );
-
             VoxelSection vs = (bridge != null) ? bridge.raycast$getVoxelSection() : null;
             if (vs == null || vs == VoxelSection.EMPTY) {
-                vs = new VoxelSection();
+                vs = (bridge != null) ? MinecraftVoxelBridge.compileSection(sec, null, secY) : null;
+                if (vs == null || vs == VoxelSection.EMPTY) {
+                    vs = new VoxelSection();
+                } else {
+                    vs = vs.copy();
+                }
             } else {
                 vs = vs.copy();
             }
@@ -196,19 +197,18 @@ public final class ChunkEditsApplicator {
                         int bMaxY = Math.min(secMaxY, mutationBuf.maxY(i));
                         int targetId = mutationBuf.targetBlockId(i);
                         int filterId = mutationBuf.filterBlockId(i);
-                        BlockState targetState = MinecraftVoxelBridge.getBlockState(targetId);
-                        BlockState filterState = (filterId >= 0) ? MinecraftVoxelBridge.getBlockState(filterId) : null;
                         byte[] rawNbt = mutationBuf.rawNbt(i);
 
                         for (int y = bMinY; y <= bMaxY; y++) {
                             int ly = y & 15;
                             for (int z = bMinZ; z <= bMaxZ; z++) {
                                 for (int x = bMinX; x <= bMaxX; x++) {
-                                    BlockState cur = newContainer.get(x, ly, z);
-                                    boolean matches = (filterId < 0) || (filterState != null && (cur == filterState || cur.getBlock() == filterState.getBlock()));
+                                    int curId = vs.getBlockId(x, ly, z);
+                                    boolean matches = (filterId < 0) || (curId == filterId);
                                     if (matches) {
-                                        newContainer.set(x, ly, z, (targetState != null) ? targetState : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-                                        vs.setVoxel(x, ly, z, targetId != BlockIdRegistry.AIR_ID, targetId);
+                                        if (curId != targetId) {
+                                            vs.setVoxel(x, ly, z, targetId != BlockIdRegistry.AIR_ID, targetId);
+                                        }
                                         appliedCount++;
 
                                         if (rawNbt != null) {
@@ -239,10 +239,11 @@ public final class ChunkEditsApplicator {
                     int lx = m.worldX() & 15;
                     int ly = m.worldY() & 15;
                     int lz = m.worldZ() & 15;
-                    BlockState cur = newContainer.get(lx, ly, lz);
-                    if (m.matchesFilter(-1, cur)) {
-                        newContainer.set(lx, ly, lz, m.targetState());
-                        vs.setVoxel(lx, ly, lz, m.targetBlockId() != BlockIdRegistry.AIR_ID, m.targetBlockId());
+                    int curId = vs.getBlockId(lx, ly, lz);
+                    if (m.matchesFilter(curId, null)) {
+                        if (curId != m.targetBlockId()) {
+                            vs.setVoxel(lx, ly, lz, m.targetBlockId() != BlockIdRegistry.AIR_ID, m.targetBlockId());
+                        }
                         appliedCount++;
 
                         if (m.tagNbt() != null) {
@@ -262,7 +263,8 @@ public final class ChunkEditsApplicator {
                 }
             }
 
-            // Pointer swap for modified sparse section
+            // Build fresh, cleanly bound PalettedContainer and execute 1-cycle pointer swap
+            PalettedContainer<BlockState> newContainer = PalettedContainerBuilder.buildFromVoxelSection(vs);
             if (bridge != null) {
                 bridge.raycast$setStates(newContainer);
                 sec.recalcBlockCounts();

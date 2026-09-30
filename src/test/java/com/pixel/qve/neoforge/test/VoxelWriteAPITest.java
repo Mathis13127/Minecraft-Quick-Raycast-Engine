@@ -150,7 +150,7 @@ public class VoxelWriteAPITest {
         assertEquals(Blocks.DIRT.defaultBlockState(), hetContainer.get(7, 8, 9));
         assertEquals(Blocks.AIR.defaultBlockState(), hetContainer.get(0, 0, 0));
 
-        // Clone or new
+        // Clone or new (heterogeneous)
         PalettedContainer<BlockState> cloned = PalettedContainerBuilder.cloneOrNew(hetContainer);
         assertNotNull(cloned);
         assertEquals(Blocks.STONE.defaultBlockState(), cloned.get(3, 4, 5));
@@ -158,6 +158,15 @@ public class VoxelWriteAPITest {
         assertEquals(Blocks.GOLD_BLOCK.defaultBlockState(), cloned.get(3, 4, 5));
         // Verify original is untouched
         assertEquals(Blocks.STONE.defaultBlockState(), hetContainer.get(3, 4, 5));
+
+        // Clone or new (homogeneous single-value palette - verifies fix for Mojang ZeroBitStorage bug)
+        PalettedContainer<BlockState> clonedAir = PalettedContainerBuilder.cloneOrNew(airContainer);
+        assertNotNull(clonedAir);
+        assertEquals(Blocks.AIR.defaultBlockState(), clonedAir.get(0, 0, 0));
+        assertDoesNotThrow(() -> clonedAir.set(0, 0, 0, Blocks.STONE.defaultBlockState()),
+                "Setting new block into cloned SingleValuePalette must resize properly without throwing ZeroBitStorage range exception");
+        assertEquals(Blocks.STONE.defaultBlockState(), clonedAir.get(0, 0, 0));
+        assertEquals(Blocks.AIR.defaultBlockState(), airContainer.get(0, 0, 0));
     }
 
     @Test

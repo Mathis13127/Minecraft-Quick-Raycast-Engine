@@ -88,12 +88,27 @@ public final class PalettedContainerBuilder {
 
     /**
      * Creates an isolated clone of an existing PalettedContainer and applies block mutations in worker threads.
+     * <p>
+     * <b>Note on Mojang SingleValuePalette bug:</b> Calling {@code base.copy()} on a container holding a
+     * {@link net.minecraft.world.level.chunk.SingleValuePalette} returns a clone sharing the exact same
+     * palette instance whose resize handler points to the original container. If mutated, the clone's
+     * ZeroBitStorage is never resized and throws an {@link IllegalArgumentException}.
+     * To prevent this, single-valued or empty containers are recreated afresh via {@link PalettedContainer#recreate()}.
+     * </p>
      *
      * @param base Existing PalettedContainer to clone, or null if creating from scratch
      * @return Cloned PalettedContainer ready for worker thread mutation
      */
     public static PalettedContainer<BlockState> cloneOrNew(PalettedContainer<BlockState> base) {
         if (base != null) {
+            try {
+                int[] distinctStates = new int[1];
+                base.count((state, count) -> distinctStates[0]++);
+                if (distinctStates[0] <= 1) {
+                    return base.recreate();
+                }
+            } catch (Throwable ignored) {
+            }
             return base.copy();
         }
         return new PalettedContainer<>(
