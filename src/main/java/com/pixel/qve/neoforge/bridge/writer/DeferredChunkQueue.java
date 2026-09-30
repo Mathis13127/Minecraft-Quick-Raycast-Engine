@@ -78,9 +78,6 @@ public final class DeferredChunkQueue {
                 map.put(key, edits);
             }
         }
-
-        LOGGER.debug("Enqueued deferred chunk edits for ({}, {}) in dimension {}",
-                edits.getChunkX(), edits.getChunkZ(), dim.location());
     }
 
     /**
