@@ -21,6 +21,12 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.PalettedContainer;
+import com.pixel.qve.neoforge.bridge.IRaycastChunkSection;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -491,6 +497,8 @@ public final class MinecraftVoxelWriter implements Closeable {
             }
         }
 
+        context.clearModifiedMask();
+
         if (modifier != null) {
             modifier.accept(context);
         }
@@ -839,36 +847,70 @@ public final class MinecraftVoxelWriter implements Closeable {
                 int maxSec = level.getMinSection() + level.getSectionsCount() - 1;
                 ChunkWriteContext context = new ChunkWriteContext(chunkX, chunkZ, minSec, maxSec, false);
 
-                modifier.accept(context);
-
-                // Apply modified blocks to live LevelChunk using reusable MutableBlockPos
-                BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
-                for (Map.Entry<Integer, VoxelSection> entry : context.getSections().entrySet()) {
-                    int secY = entry.getKey();
-                    VoxelSection voxSec = entry.getValue();
-                    if (voxSec == null) continue;
-
-                    int baseY = secY << 4;
-                    for (int z = 0; z < 16; z++) {
-                        for (int x = 0; x < 16; x++) {
-                            for (int y = 0; y < 16; y++) {
-                                int blockId = voxSec.getBlockId(x, y, z);
-                                if (blockId != 0) {
-                                    BlockState bs = MinecraftVoxelBridge.getBlockState(blockId);
-                                    if (bs != null) {
-                                        mutPos.set((chunkX << 4) | x, baseY + y, (chunkZ << 4) | z);
-                                        boolean placed = level.setBlock(mutPos, bs, 2 | 16);
-                                        if (!placed) {
-                                            throw new IllegalStateException("Failed to place block in RAM at " + mutPos + " with state " + bs);
+                // Pre-populate with existing sections from chunk
+                for (int sy = minSec; sy <= maxSec; sy++) {
+                    int secIdx = chunk.getSectionIndex(sy << 4);
+                    if (secIdx >= 0 && secIdx < chunk.getSections().length) {
+                        LevelChunkSection sec = chunk.getSections()[secIdx];
+                        if (sec != null && !sec.hasOnlyAir()) {
+                            if (sec instanceof IRaycastChunkSection bridge && bridge.raycast$getVoxelSection() != null) {
+                                context.setSection(sy, bridge.raycast$getVoxelSection().copy());
+                            } else {
+                                VoxelSection vs = new VoxelSection();
+                                for (int y = 0; y < 16; y++) {
+                                    for (int z = 0; z < 16; z++) {
+                                        for (int x = 0; x < 16; x++) {
+                                            BlockState bs = sec.getBlockState(x, y, z);
+                                            if (!bs.isAir()) {
+                                                int id = MinecraftVoxelBridge.getBlockId(bs);
+                                                vs.setVoxel(x, y, z, true, id);
+                                            }
                                         }
                                     }
                                 }
+                                context.setSection(sy, vs);
                             }
+                        }
+                    }
+                }
+                context.clearModifiedMask();
+
+                modifier.accept(context);
+
+                // Atomic PalettedContainer pointer swap for each modified section
+                int mask = context.getModifiedSectionMask();
+                for (Map.Entry<Integer, VoxelSection> entry : context.getSections().entrySet()) {
+                    int secY = entry.getKey();
+                    if ((mask & (1 << (secY - minSec))) == 0) {
+                        continue;
+                    }
+                    VoxelSection voxSec = entry.getValue();
+                    if (voxSec == null) continue;
+
+                    int secIdx = chunk.getSectionIndex(secY << 4);
+                    if (secIdx < 0 || secIdx >= chunk.getSections().length) continue;
+
+                    LevelChunkSection sec = chunk.getSections()[secIdx];
+                    if (sec == null) {
+                        sec = new LevelChunkSection(chunk.getLevel().registryAccess().registryOrThrow(Registries.BIOME));
+                        chunk.getSections()[secIdx] = sec;
+                    }
+
+                    PalettedContainer<BlockState> newContainer = PalettedContainerBuilder.buildFromVoxelSection(voxSec);
+                    if (sec instanceof IRaycastChunkSection bridge) {
+                        bridge.raycast$setStates(newContainer);
+                        sec.recalcBlockCounts();
+                        bridge.raycast$setVoxelSection(voxSec);
+                        VoxelChunkColumn col = bridge.raycast$getVoxelColumn();
+                        if (col != null) {
+                            col.setSection(secY, voxSec);
+                            col.setCachedLighting(null);
                         }
                     }
                 }
 
                 // Apply block entities if present
+                BlockPos.MutableBlockPos mutPos = new BlockPos.MutableBlockPos();
                 for (Map.Entry<Long, byte[]> beEntry : context.getBlockEntities().entrySet()) {
                     long key = beEntry.getKey();
                     int lx = (int) (key & 0xF);
@@ -896,7 +938,25 @@ public final class MinecraftVoxelWriter implements Closeable {
                 MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
                 if (grid != null) {
                     grid.getCache().invalidateChunk(chunkX, chunkZ);
+                    VoxelChunkColumn col = grid.getColumn(chunkX, chunkZ);
+                    if (col != null) {
+                        grid.syncHeightmapFromChunk(chunk, col, chunkX, chunkZ);
+                    }
                 }
+
+                if (level instanceof ServerLevel serverLevel) {
+                    ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(
+                            chunk,
+                            serverLevel.getLightEngine(),
+                            null,
+                            null
+                    );
+                    List<ServerPlayer> players = serverLevel.getChunkSource().chunkMap.getPlayers(chunk.getPos(), false);
+                    for (ServerPlayer player : players) {
+                        player.connection.send(packet);
+                    }
+                }
+
                 long duration = System.nanoTime() - startTime;
                 future.complete(WriteResult.successRam(chunkX, chunkZ, duration));
             } catch (Throwable t) {

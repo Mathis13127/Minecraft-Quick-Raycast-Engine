@@ -246,7 +246,7 @@ public final class MinecraftVoxelGrid implements IVoxelGrid, AutoCloseable {
         return null;
     }
 
-    private void syncHeightmapFromChunk(LevelChunk chunk, VoxelChunkColumn col, int chunkX, int chunkZ) {
+    public void syncHeightmapFromChunk(LevelChunk chunk, VoxelChunkColumn col, int chunkX, int chunkZ) {
         Heightmap2D colHm = col.getHeightmap();
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {

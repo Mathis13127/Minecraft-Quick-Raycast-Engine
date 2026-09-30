@@ -14,6 +14,7 @@ import com.pixel.qve.neoforge.api.event.ChunkPostDirectWriteEvent;
 import com.pixel.qve.neoforge.api.event.ChunkPreDirectWriteEvent;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
 import com.pixel.qve.neoforge.bridge.writer.ChunkWriteContext;
+import com.pixel.qve.neoforge.bridge.writer.PalettedContainerBuilder;
 import com.pixel.qve.neoforge.recovery.BatchRecoveryJournal;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.SharedConstants;
@@ -27,6 +28,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.level.storage.LevelResource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -103,6 +105,54 @@ public class VoxelWriteAPITest {
 
         int mask = ctx.getModifiedSectionMask();
         assertTrue((mask & (1 << (4 - (-4)))) != 0, "Modified mask must reflect section 4");
+    }
+
+    @Test
+    @DisplayName("Verify PalettedContainer construction and copy")
+    void testPalettedContainerConstruction() {
+        net.minecraft.world.level.chunk.PalettedContainer<BlockState> container =
+                new net.minecraft.world.level.chunk.PalettedContainer<>(
+                        net.minecraft.world.level.block.Block.BLOCK_STATE_REGISTRY,
+                        Blocks.AIR.defaultBlockState(),
+                        net.minecraft.world.level.chunk.PalettedContainer.Strategy.SECTION_STATES
+                );
+        assertNotNull(container);
+        assertEquals(Blocks.AIR.defaultBlockState(), container.get(0, 0, 0));
+        container.set(0, 0, 0, Blocks.STONE.defaultBlockState());
+        assertEquals(Blocks.STONE.defaultBlockState(), container.get(0, 0, 0));
+    }
+
+    @Test
+    @DisplayName("Verify PalettedContainerBuilder with homogeneous and heterogeneous sections")
+    void testPalettedContainerBuilder() {
+        // Homogeneous empty/air
+        VoxelSection emptySec = new VoxelSection();
+        PalettedContainer<BlockState> airContainer = PalettedContainerBuilder.buildFromVoxelSection(emptySec);
+        assertNotNull(airContainer);
+        assertEquals(Blocks.AIR.defaultBlockState(), airContainer.get(0, 0, 0));
+        assertEquals(Blocks.AIR.defaultBlockState(), airContainer.get(15, 15, 15));
+
+        // Heterogeneous section
+        VoxelSection hetSec = new VoxelSection();
+        int stoneId = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockId(Blocks.STONE.defaultBlockState());
+        int dirtId = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockId(Blocks.DIRT.defaultBlockState());
+        hetSec.setVoxel(3, 4, 5, true, stoneId);
+        hetSec.setVoxel(7, 8, 9, true, dirtId);
+
+        PalettedContainer<BlockState> hetContainer = PalettedContainerBuilder.buildFromVoxelSection(hetSec);
+        assertNotNull(hetContainer);
+        assertEquals(Blocks.STONE.defaultBlockState(), hetContainer.get(3, 4, 5));
+        assertEquals(Blocks.DIRT.defaultBlockState(), hetContainer.get(7, 8, 9));
+        assertEquals(Blocks.AIR.defaultBlockState(), hetContainer.get(0, 0, 0));
+
+        // Clone or new
+        PalettedContainer<BlockState> cloned = PalettedContainerBuilder.cloneOrNew(hetContainer);
+        assertNotNull(cloned);
+        assertEquals(Blocks.STONE.defaultBlockState(), cloned.get(3, 4, 5));
+        cloned.set(3, 4, 5, Blocks.GOLD_BLOCK.defaultBlockState());
+        assertEquals(Blocks.GOLD_BLOCK.defaultBlockState(), cloned.get(3, 4, 5));
+        // Verify original is untouched
+        assertEquals(Blocks.STONE.defaultBlockState(), hetContainer.get(3, 4, 5));
     }
 
     @Test

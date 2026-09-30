@@ -40,9 +40,26 @@ public interface IRaycastChunkSection {
     void raycast$setVoxelColumn(VoxelChunkColumn column, int sectionY);
 
     /**
-     * Gets the vertical section Y index.
+     * Gets the vertical section Y coordinate.
      *
      * @return Section Y coordinate
      */
     int raycast$getSectionY();
+
+    /**
+     * Retrieves the underlying vanilla PalettedContainer for block states.
+     *
+     * @return PalettedContainer instance, or null if unallocated
+     */
+    default net.minecraft.world.level.chunk.PalettedContainer<net.minecraft.world.level.block.state.BlockState> raycast$getStates() {
+        return null;
+    }
+
+    /**
+     * Atomically swaps the underlying vanilla PalettedContainer for block states in 1 CPU cycle.
+     *
+     * @param states New PalettedContainer instance
+     */
+    default void raycast$setStates(net.minecraft.world.level.chunk.PalettedContainer<net.minecraft.world.level.block.state.BlockState> states) {
+    }
 }

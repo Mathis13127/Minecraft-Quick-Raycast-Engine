@@ -153,6 +153,10 @@ public class ChunkWriteContext implements IChunkWriteContext {
         return modifiedMask;
     }
 
+    public void clearModifiedMask() {
+        this.modifiedMask = 0;
+    }
+
     @Override
     public boolean isNewChunk() {
         return isNew;
