@@ -27,12 +27,17 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainer;
 import com.pixel.qve.neoforge.bridge.IRaycastChunkSection;
+import com.pixel.qve.neoforge.mixin.ChunkStorageAccessor;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.storage.IOWorker;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,6 +46,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -111,6 +117,25 @@ public final class MinecraftVoxelWriter implements Closeable {
     }
 
     /**
+     * Retrieves Mojang's native IOWorker if available on a live ServerLevel.
+     *
+     * @return IOWorker instance, or null if running offline/mock level
+     */
+    public IOWorker getIOWorker() {
+        if (level instanceof ServerLevel sl) {
+            try {
+                var chunkMap = sl.getChunkSource().chunkMap;
+                if (chunkMap instanceof ChunkStorageAccessor accessor) {
+                    return accessor.qve$getWorker();
+                }
+            } catch (Throwable t) {
+                LOGGER.warn("Failed to retrieve IOWorker from ServerLevel: {}", t.getMessage());
+            }
+        }
+        return null;
+    }
+
+    /**
      * Modifies a block without concern for whether its chunk is currently loaded in RAM or unloaded on disk.
      *
      * @param pos            Block position
@@ -125,7 +150,7 @@ public final class MinecraftVoxelWriter implements Closeable {
 
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
             return setBlockRamAsync(pos, state, flags, blockEntityNbt);
-        } else if (ChunkExclusivityGuard.isRegionActiveInRam(level, cx >> 5, cz >> 5)) {
+        } else if (getIOWorker() == null && ChunkExclusivityGuard.isRegionActiveInRam(level, cx >> 5, cz >> 5)) {
             ChunkWriteBatch.ChunkEdits edits = new ChunkWriteBatch.ChunkEdits(cx, cz);
             byte[] rawNbt = null;
             if (blockEntityNbt != null) {
@@ -166,7 +191,7 @@ public final class MinecraftVoxelWriter implements Closeable {
     public CompletableFuture<WriteResult> modifyChunkUnifiedAsync(int chunkX, int chunkZ, Consumer<IChunkWriteContext> modifier) {
         if (ChunkExclusivityGuard.isChunkLoadedInRam(level, chunkX, chunkZ)) {
             return modifyChunkRamAsync(chunkX, chunkZ, modifier);
-        } else if (ChunkExclusivityGuard.isRegionActiveInRam(level, chunkX >> 5, chunkZ >> 5)) {
+        } else if (getIOWorker() == null && ChunkExclusivityGuard.isRegionActiveInRam(level, chunkX >> 5, chunkZ >> 5)) {
             long t0 = System.nanoTime();
             try {
                 ChunkWriteContext context = prepareChunkContext(chunkX, chunkZ, null, null, modifier);
@@ -303,6 +328,74 @@ public final class MinecraftVoxelWriter implements Closeable {
             );
         }
 
+        IOWorker worker = getIOWorker();
+        if (worker != null) {
+            ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
+            return worker.loadAsync(chunkPos).thenComposeAsync(optTag -> {
+                boolean chunkExists = optTag.isPresent();
+                if (!chunkExists && opts.shouldFailIfMissing()) {
+                    return CompletableFuture.completedFuture(
+                            WriteResult.failure(WriteStatus.FAIL_CHUNK_NOT_FOUND, chunkX, chunkZ,
+                                    "Chunk (" + chunkX + ", " + chunkZ + ") does not exist on disk and FAIL_IF_MISSING policy is active")
+                    );
+                }
+
+                int minSec = level.getMinSection();
+                int maxSec = level.getMinSection() + level.getSectionsCount() - 1;
+                ChunkWriteContext context = new ChunkWriteContext(chunkX, chunkZ, minSec, maxSec, !chunkExists);
+                if (modifier != null) {
+                    try {
+                        modifier.accept(context);
+                    } catch (Throwable t) {
+                        LOGGER.error("Exception during chunk modifier callback for chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage(), t);
+                        return CompletableFuture.completedFuture(
+                                WriteResult.failure(WriteStatus.FAIL_IO_ERROR, chunkX, chunkZ, t.getMessage())
+                        );
+                    }
+                }
+
+                ChunkPreDirectWriteEvent preEvent = new ChunkPreDirectWriteEvent(level, chunkX, chunkZ, context);
+                if (NeoForge.EVENT_BUS.post(preEvent).isCanceled()) {
+                    return CompletableFuture.completedFuture(
+                            WriteResult.failure(WriteStatus.FAIL_CANCELLED_BY_EVENT, chunkX, chunkZ, "Cancelled by ChunkPreDirectWriteEvent")
+                    );
+                }
+
+                CompoundTag modifiedTag;
+                try {
+                    BlockIdRegistry registry = MinecraftVoxelBridge.getBlockRegistry();
+                    modifiedTag = NbtChunkModifier.modifyChunkTag(
+                            optTag.orElse(null),
+                            chunkX,
+                            chunkZ,
+                            minSec,
+                            maxSec,
+                            registry,
+                            context.getSections(),
+                            null,
+                            context.getBlockEntities()
+                    );
+                } catch (Throwable t) {
+                    LOGGER.error("Failed to patch NBT for chunk ({}, {}): {}", chunkX, chunkZ, t.getMessage(), t);
+                    return CompletableFuture.completedFuture(
+                            WriteResult.failure(WriteStatus.FAIL_IO_ERROR, chunkX, chunkZ, t.getMessage())
+                    );
+                }
+
+                return worker.store(chunkPos, modifiedTag).thenApply(v -> {
+                    long duration = System.nanoTime() - startTime;
+                    MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
+                    if (grid != null) {
+                        grid.getCache().invalidateChunk(chunkX, chunkZ);
+                    }
+
+                    WriteResult result = WriteResult.successDisk(chunkX, chunkZ, duration, 0, 0, false);
+                    NeoForge.EVENT_BUS.post(new ChunkPostDirectWriteEvent(level, chunkX, chunkZ, result, context.getModifiedSectionMask()));
+                    return result;
+                });
+            }, VoxelDiskWriterThreadPool.getExecutor());
+        }
+
         if (coordinator == null) {
             return CompletableFuture.completedFuture(
                     WriteResult.failure(WriteStatus.FAIL_IO_ERROR, chunkX, chunkZ, "Region directory unavailable for dimension " + level.dimension().location())
@@ -382,6 +475,25 @@ public final class MinecraftVoxelWriter implements Closeable {
      * @return True if block physically on disk matches expectedBlockId
      */
     public boolean verifyPhysicalDiskWrite(int chunkX, int chunkZ, int localX, int worldY, int localZ, int expectedBlockId) {
+        IOWorker worker = getIOWorker();
+        if (worker != null) {
+            try {
+                Optional<CompoundTag> opt = worker.loadAsync(new ChunkPos(chunkX, chunkZ)).join();
+                if (opt.isPresent()) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    net.minecraft.nbt.NbtIo.write(opt.get(), new java.io.DataOutputStream(baos));
+                    ByteBuffer payload = ByteBuffer.wrap(baos.toByteArray());
+                    return com.pixel.qve.mca.writer.FastChunkVerifier.verifyChunkVoxel(
+                            payload, chunkX, chunkZ, localX, worldY, localZ, expectedBlockId, MinecraftVoxelBridge.getBlockRegistry());
+                } else {
+                    return expectedBlockId == BlockIdRegistry.AIR_ID;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Verification via IOWorker failed for chunk ({}, {}): {}", chunkX, chunkZ, e.getMessage());
+                return false;
+            }
+        }
+
         if (coordinator != null) {
             return coordinator.verifyVoxel(chunkX, chunkZ, localX, worldY, localZ, expectedBlockId);
         }
@@ -520,6 +632,130 @@ public final class MinecraftVoxelWriter implements Closeable {
         }
 
         WriteOptions opts = (options != null) ? options : WriteOptions.DEFAULT;
+        long startTime = System.nanoTime();
+
+        IOWorker worker = getIOWorker();
+        if (worker != null) {
+            List<CompletableFuture<WriteResult>> futures = new ArrayList<>(editsList.size());
+            for (ChunkWriteBatch.ChunkEdits edits : editsList) {
+                int cx = edits.getChunkX();
+                int cz = edits.getChunkZ();
+
+                if (ChunkExclusivityGuard.isChunkLoadedInRam(level, cx, cz)) {
+                    if (opts.isStrict()) {
+                        WriteResult err = WriteResult.failure(WriteStatus.FAIL_CHUNK_LOADED_IN_RAM, cx, cz,
+                                "Chunk (" + cx + ", " + cz + ") became resident in RAM");
+                        futures.add(CompletableFuture.completedFuture(err));
+                    } else {
+                        futures.add(applyChunkEditsToRam(edits));
+                    }
+                    continue;
+                }
+
+                ChunkPos chunkPos = new ChunkPos(cx, cz);
+                CompletableFuture<WriteResult> chunkFuture = worker.loadAsync(chunkPos).thenComposeAsync(optTag -> {
+                    boolean chunkExists = optTag.isPresent();
+                    if (!chunkExists && opts.shouldFailIfMissing()) {
+                        return CompletableFuture.completedFuture(
+                                WriteResult.failure(WriteStatus.FAIL_CHUNK_NOT_FOUND, cx, cz,
+                                        "Chunk (" + cx + ", " + cz + ") does not exist on disk and FAIL_IF_MISSING policy is active")
+                        );
+                    }
+
+                    PrimitiveMutationBuffer mutationBuf = edits.getMutationBuffer();
+                    Map<Long, byte[]> blockEntities = null;
+                    if (mutationBuf != null && mutationBuf.hasRawNbts()) {
+                        for (int mi = 0, sz = mutationBuf.size(); mi < sz; mi++) {
+                            byte[] raw = mutationBuf.rawNbt(mi);
+                            if (raw != null) {
+                                if (blockEntities == null) {
+                                    blockEntities = new HashMap<>();
+                                }
+                                int lx = mutationBuf.localX(mi);
+                                int ly = mutationBuf.worldY(mi);
+                                int lz = mutationBuf.localZ(mi);
+                                long key = (((long) (ly & 0xFFFF)) << 8) | (((long) (lz & 0xF)) << 4) | ((long) (lx & 0xF));
+                                blockEntities.put(key, raw);
+                            }
+                        }
+                    }
+
+                    int minSec = level.getMinSection();
+                    int maxSec = level.getMinSection() + level.getSectionsCount() - 1;
+                    BatchChunkWriteContext context = new BatchChunkWriteContext(cx, cz, minSec, maxSec, edits, blockEntities);
+
+                    ChunkPreDirectWriteEvent preEvent = new ChunkPreDirectWriteEvent(level, cx, cz, context);
+                    if (NeoForge.EVENT_BUS.post(preEvent).isCanceled()) {
+                        return CompletableFuture.completedFuture(
+                                WriteResult.failure(WriteStatus.FAIL_CANCELLED_BY_EVENT, cx, cz, "Cancelled by ChunkPreDirectWriteEvent")
+                        );
+                    }
+
+                    CompoundTag modifiedTag;
+                    try {
+                        BlockIdRegistry registry = MinecraftVoxelBridge.getBlockRegistry();
+                        modifiedTag = NbtChunkModifier.modifyChunkTag(
+                                optTag.orElse(null),
+                                cx,
+                                cz,
+                                minSec,
+                                maxSec,
+                                registry,
+                                edits.getWholeSections(),
+                                mutationBuf,
+                                blockEntities
+                        );
+                    } catch (Throwable t) {
+                        LOGGER.error("Failed to patch NBT for batch chunk ({}, {}): {}", cx, cz, t.getMessage(), t);
+                        return CompletableFuture.completedFuture(
+                                WriteResult.failure(WriteStatus.FAIL_IO_ERROR, cx, cz, t.getMessage())
+                        );
+                    }
+
+                    return worker.store(chunkPos, modifiedTag).thenApply(v -> {
+                        long duration = System.nanoTime() - startTime;
+                        MinecraftVoxelGrid grid = MinecraftVoxelBridge.getOrCreateGrid(level);
+                        if (grid != null) {
+                            grid.getCache().invalidateChunk(cx, cz);
+                        }
+
+                        boolean verified = false;
+                        String verifiedName = null;
+                        if (mutationBuf != null && !mutationBuf.isEmpty()) {
+                            int bId = mutationBuf.targetBlockId(0);
+                            BlockState bs = MinecraftVoxelBridge.getBlockState(bId);
+                            verifiedName = (bs != null) ? bs.getBlock().getName().getString() : "id:" + bId;
+                            verified = true;
+                        } else if (!edits.getMutations().isEmpty()) {
+                            ChunkWriteBatch.BlockMutation firstMut = edits.getMutations().get(0);
+                            verifiedName = (firstMut.targetState() != null)
+                                    ? firstMut.targetState().getBlock().getName().getString()
+                                    : "id:" + firstMut.targetBlockId();
+                            verified = true;
+                        }
+
+                        WriteResult result = WriteResult.successDisk(cx, cz, duration, 0, 0, false);
+                        if (verified) {
+                            result = result.withVerification(true, verifiedName);
+                        }
+                        NeoForge.EVENT_BUS.post(new ChunkPostDirectWriteEvent(level, cx, cz, result, context.getModifiedSectionMask()));
+                        return result;
+                    });
+                }, VoxelDiskWriterThreadPool.getExecutor());
+
+                futures.add(chunkFuture);
+            }
+
+            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .thenApply(v -> {
+                        List<WriteResult> res = new ArrayList<>(futures.size());
+                        for (CompletableFuture<WriteResult> f : futures) {
+                            res.add(f.join());
+                        }
+                        return res;
+                    });
+        }
+
         if (coordinator == null) {
             List<WriteResult> errs = new ArrayList<>(editsList.size());
             for (ChunkWriteBatch.ChunkEdits e : editsList) {
@@ -527,8 +763,6 @@ public final class MinecraftVoxelWriter implements Closeable {
             }
             return CompletableFuture.completedFuture(errs);
         }
-
-        long startTime = System.nanoTime();
 
         return VoxelDiskWriterThreadPool.submit(() -> {
             List<McaWriteCoordinator.ChunkWriteTask> tasks = new ArrayList<>(editsList.size());
@@ -980,6 +1214,14 @@ public final class MinecraftVoxelWriter implements Closeable {
 
     @Override
     public synchronized void close() {
+        IOWorker worker = getIOWorker();
+        if (worker != null) {
+            try {
+                worker.synchronize(true).join();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to synchronize IOWorker on close: {}", e.getMessage());
+            }
+        }
         if (coordinator != null) {
             coordinator.close();
         }

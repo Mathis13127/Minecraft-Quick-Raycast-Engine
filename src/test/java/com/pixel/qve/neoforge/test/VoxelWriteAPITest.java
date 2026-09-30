@@ -12,13 +12,18 @@ import com.pixel.qve.neoforge.api.WriteResult;
 import com.pixel.qve.neoforge.api.WriteStatus;
 import com.pixel.qve.neoforge.api.event.ChunkPostDirectWriteEvent;
 import com.pixel.qve.neoforge.api.event.ChunkPreDirectWriteEvent;
+import com.pixel.qve.mca.writer.PrimitiveMutationBuffer;
 import com.pixel.qve.neoforge.bridge.writer.ChunkExclusivityGuard;
 import com.pixel.qve.neoforge.bridge.writer.ChunkWriteContext;
+import com.pixel.qve.neoforge.bridge.writer.NbtChunkModifier;
 import com.pixel.qve.neoforge.bridge.writer.PalettedContainerBuilder;
 import com.pixel.qve.neoforge.recovery.BatchRecoveryJournal;
 import com.pixel.qve.world.VoxelSection;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
@@ -153,6 +158,75 @@ public class VoxelWriteAPITest {
         assertEquals(Blocks.GOLD_BLOCK.defaultBlockState(), cloned.get(3, 4, 5));
         // Verify original is untouched
         assertEquals(Blocks.STONE.defaultBlockState(), hetContainer.get(3, 4, 5));
+    }
+
+    @Test
+    @DisplayName("Verify NbtChunkModifier creates ex-nihilo chunk NBT with full status and correct sections")
+    void testNbtChunkModifierExNihilo() throws Exception {
+        com.pixel.qve.state.BlockIdRegistry registry = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockRegistry();
+        int stoneId = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockId(Blocks.STONE.defaultBlockState());
+
+        VoxelSection sec = new VoxelSection();
+        sec.setVoxel(0, 0, 0, true, stoneId);
+        sec.setVoxel(15, 15, 15, true, stoneId);
+
+        CompoundTag tag = NbtChunkModifier.modifyChunkTag(
+                null,
+                5, 10,
+                -4, 19,
+                registry,
+                java.util.Map.of(0, sec),
+                null,
+                null
+        );
+
+        assertNotNull(tag);
+        assertEquals(3955, tag.getInt("DataVersion"));
+        assertEquals(5, tag.getInt("xPos"));
+        assertEquals(10, tag.getInt("zPos"));
+        assertEquals("minecraft:full", tag.getString("Status"));
+        assertTrue(tag.contains("sections", Tag.TAG_LIST));
+        ListTag sections = tag.getList("sections", Tag.TAG_COMPOUND);
+        assertFalse(sections.isEmpty());
+    }
+
+    @Test
+    @DisplayName("Verify NbtChunkModifier patches existing chunk NBT non-destructively")
+    void testNbtChunkModifierPatch() throws Exception {
+        com.pixel.qve.state.BlockIdRegistry registry = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockRegistry();
+        int diamondId = com.pixel.qve.neoforge.bridge.MinecraftVoxelBridge.getBlockId(Blocks.DIAMOND_BLOCK.defaultBlockState());
+
+        // 1. Base chunk tag with empty air
+        CompoundTag baseTag = NbtChunkModifier.modifyChunkTag(
+                null,
+                2, 3,
+                -4, 19,
+                registry,
+                java.util.Map.of(),
+                null,
+                null
+        );
+        assertNotNull(baseTag);
+
+        // 2. Patch with Diamond Block at (4, 4, 4) in section 1
+        VoxelSection diamondSec = new VoxelSection();
+        diamondSec.setVoxel(4, 4, 4, true, diamondId);
+
+        CompoundTag patchedTag = NbtChunkModifier.modifyChunkTag(
+                baseTag,
+                2, 3,
+                -4, 19,
+                registry,
+                java.util.Map.of(1, diamondSec),
+                null,
+                null
+        );
+
+        assertNotNull(patchedTag);
+        assertEquals(2, patchedTag.getInt("xPos"));
+        assertEquals(3, patchedTag.getInt("zPos"));
+        assertEquals("minecraft:full", patchedTag.getString("Status"));
+        assertTrue(patchedTag.contains("sections", Tag.TAG_LIST));
     }
 
     @Test
